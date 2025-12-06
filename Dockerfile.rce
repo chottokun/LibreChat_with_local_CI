@@ -1,0 +1,9 @@
+FROM python:3.11-slim
+
+WORKDIR /usr/src/app
+
+COPY rce_requirements.txt .
+RUN pip install --no-cache-dir -r rce_requirements.txt
+
+# Keep the container running so we can exec into it
+CMD ["tail", "-f", "/dev/null"]

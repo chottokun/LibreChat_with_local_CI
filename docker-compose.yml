@@ -1,0 +1,18 @@
+services:
+  code-interpreter-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: librechat_code_interpreter_api
+    ports:
+      - "8000:8000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - CUSTOM_RCE_API_KEY=your_secret_key
+    restart: unless-stopped
+
+  # Note: The 'custom-rce-kernel' image must be built on the host manually 
+  # or we can add a service to build it, but it's not a service that runs continuously.
+  # For simplicity, we assume the user has run 'docker build -f Dockerfile.rce -t custom-rce-kernel:latest .' 
+  # as per README instructions.

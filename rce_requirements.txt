@@ -1,0 +1,5 @@
+pandas
+numpy
+scipy
+matplotlib
+# ipykernel # Optional if we use raw python, but good to have for future

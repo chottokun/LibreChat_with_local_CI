@@ -1,0 +1,10 @@
+version: 1.0.0
+cache: true
+# ... other settings can go here
+
+codeInterpreter:
+  enabled: true
+
+fileConfig:
+  enabled: true
+  uploadDir: ./uploads

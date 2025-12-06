@@ -2,6 +2,14 @@
 
 このドキュメントは、LibreChatのCode Interpreter機能が外部のカスタムPython API環境（FastAPI）で動作するための、セキュリティと機能の確からしさを確保した手順です。
 
+# LibreChatに利用するLLM
+```.env
+# OpenAI API key
+OPENAI_API_KEY={secret_api}
+OPENAI_BASE_URL=https://api.ai.sakura.ad.jp/v1/
+OPENAI_MODEL=gpt-oss-120b
+```
+
 **1\. Python環境の構築と依存関係の準備**
 
 APIサーバー（FastAPI/Uvicorn）を動作させるための環境を確立します。このサーバー自体は、RCEを実行するホストとは分離されている必要があります。

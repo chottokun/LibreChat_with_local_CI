@@ -1,0 +1,22 @@
+# Dockerfile for the Code Interpreter API Server (FastAPI)
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Copy dependency definitions
+COPY pyproject.toml .
+COPY rce_requirements.txt . 
+# Note: rce_requirements.txt is for the RCE image, but we copy it just in case we need to reference it.
+# The API server itself relies on pyproject.toml (managed by uv, but here we just pip install for simplicity in Docker)
+
+# Install API dependencies directly
+RUN pip install --no-cache-dir fastapi[standard] uvicorn[standard] pydantic python-multipart docker
+
+# Copy application code
+COPY main.py .
+
+# Expose port
+EXPOSE 8000
+
+# Run the application
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
