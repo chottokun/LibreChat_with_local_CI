@@ -1,10 +1,14 @@
-import traceback
+import logging
+import os
+import uuid
+import docker
 from fastapi import FastAPI, HTTPException, Security
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
-import docker
-import os
-import uuid
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # 1. Authentication Scheme
 API_KEY = os.environ.get("CUSTOM_RCE_API_KEY", "your_secret_key")
@@ -62,8 +66,8 @@ class KernelManager:
             self.active_kernels[session_id] = container.id
             return container
         except Exception as e:
-            print(traceback.format_exc())
-            raise HTTPException(status_code=500, detail=f"Failed to start sandbox: {str(e)}")
+            logger.exception("Failed to start sandbox for session %s", session_id)
+            raise HTTPException(status_code=500, detail="Failed to start sandbox. Please contact an administrator.")
 
     def execute_code(self, session_id: str, code: str):
         container = self.get_or_create_container(session_id)
@@ -108,8 +112,8 @@ class KernelManager:
             }
             
         except Exception as e:
-            print(traceback.format_exc())
-            return {"error": str(e)}
+            logger.exception("Error executing code in session %s", session_id)
+            return {"error": "An internal error occurred during code execution."}
 
 kernel_manager = KernelManager()
 
