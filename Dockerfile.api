@@ -5,12 +5,12 @@ WORKDIR /app
 
 # Copy dependency definitions
 COPY pyproject.toml .
-COPY rce_requirements.txt . 
+COPY rce_requirements.txt .
+COPY requirements.api.txt .
 # Note: rce_requirements.txt is for the RCE image, but we copy it just in case we need to reference it.
-# The API server itself relies on pyproject.toml (managed by uv, but here we just pip install for simplicity in Docker)
 
-# Install API dependencies directly
-RUN pip install --no-cache-dir fastapi[standard] uvicorn[standard] pydantic python-multipart docker
+# Install API dependencies using the pinned requirements file
+RUN pip install --no-cache-dir -r requirements.api.txt
 
 # Copy application code
 COPY main.py .
