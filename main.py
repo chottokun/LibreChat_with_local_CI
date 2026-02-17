@@ -77,9 +77,6 @@ class KernelManager:
         # A robust implementation would write the code to a file inside container then run it.
         
         try:
-            # 1. Write code to file inside container
-            code_filename = f"/tmp/exec_{uuid.uuid4().hex}.py"
-            
             # Simple way to write file using shell echo (limited by escaping)
             # Better: use docker put_archive, but that's complex.
             # We'll use a python one-liner to write the file content to avoid shell escaping hell
