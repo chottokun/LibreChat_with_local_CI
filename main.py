@@ -25,7 +25,8 @@ class KernelManager:
     Manages Docker containers for code execution sessions.
     Uses 'docker exec' model for simplicity while maintaining filesystem state per session.
     """
-    active_kernels = {} # Maps session_id to container_id
+    def __init__(self):
+        self.active_kernels = {} # Maps session_id to container_id
 
     def get_or_create_container(self, session_id: str):
         if session_id in self.active_kernels:
