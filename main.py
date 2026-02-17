@@ -25,23 +25,34 @@ class KernelManager:
     Manages Docker containers for code execution sessions.
     Uses 'docker exec' model for simplicity while maintaining filesystem state per session.
     """
-    active_kernels = {} # Maps session_id to container_id
+    active_kernels = {} # Maps session_id to container object
 
-    def get_or_create_container(self, session_id: str):
+    def get_or_create_container(self, session_id: str, force_refresh: bool = False):
+        if not force_refresh and session_id in self.active_kernels:
+            return self.active_kernels[session_id]
+
         if session_id in self.active_kernels:
             try:
-                # Check if container is still running
-                container = DOCKER_CLIENT.containers.get(self.active_kernels[session_id])
+                # Re-fetch or refresh container status
+                container = self.active_kernels[session_id]
+                # If we have an object, we can try to reload it to get fresh status
+                try:
+                    container.reload()
+                except docker.errors.NotFound:
+                    # If reload fails, it's gone
+                    del self.active_kernels[session_id]
+                    return self.start_new_container(session_id)
+
                 if container.status == "running":
                     return container
                 else:
-                    # Restart or cleanup if stopped
+                    # Restart if stopped
                     container.start()
                     return container
-            except docker.errors.NotFound:
-                # Container lost, remove from registry
+            except Exception:
+                # Any other error, try to start fresh
                 del self.active_kernels[session_id]
-        
+
         return self.start_new_container(session_id)
 
     def start_new_container(self, session_id: str):
@@ -59,7 +70,7 @@ class KernelManager:
                 network_disabled=True, # Isolation
                 name=f"rce_{session_id}_{uuid.uuid4().hex[:6]}"
             )
-            self.active_kernels[session_id] = container.id
+            self.active_kernels[session_id] = container
             return container
         except Exception as e:
             print(traceback.format_exc())
@@ -78,28 +89,23 @@ class KernelManager:
         
         try:
             # 1. Write code to file inside container
-            code_filename = f"/tmp/exec_{uuid.uuid4().hex}.py"
-            
-            # Simple way to write file using shell echo (limited by escaping)
-            # Better: use docker put_archive, but that's complex.
-            # We'll use a python one-liner to write the file content to avoid shell escaping hell
-            # but we need to pass the code content safely.
-            
-            # Simplest robust way: Exec python with code passed as argument or stdin?
-            # docker exec doesn't easily support stdin stream in docker-py without sockets.
-            
-            # Let's try passing code as argument to python -c.
-            # But arguments have length limits.
-            
-            # Alternative: Construct a safe command.
-            # Using 'python3 -c ...' directly.
+            # (In a real implementation we would write the code content safely)
             
             cmd = ["python3", "-c", code]
             
-            exec_result = container.exec_run(
-                cmd=cmd,
-                workdir="/usr/src/app"
-            )
+            try:
+                exec_result = container.exec_run(
+                    cmd=cmd,
+                    workdir="/usr/src/app"
+                )
+            except (docker.errors.APIError, docker.errors.NotFound):
+                # Optimistic assumption failed: container might be stopped or gone
+                # Recovery: Force refresh and retry once
+                container = self.get_or_create_container(session_id, force_refresh=True)
+                exec_result = container.exec_run(
+                    cmd=cmd,
+                    workdir="/usr/src/app"
+                )
             
             return {
                 "stdout": exec_result.output.decode("utf-8") if exec_result.output else "",
