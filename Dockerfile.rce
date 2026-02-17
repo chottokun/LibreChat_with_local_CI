@@ -1,9 +1,18 @@
 FROM python:3.11-slim
 
+# Create a non-root user
+RUN useradd -m -s /bin/bash sandboxuser
+
 WORKDIR /usr/src/app
 
 COPY rce_requirements.txt .
 RUN pip install --no-cache-dir -r rce_requirements.txt
+
+# Ensure the workspace is owned by the non-root user
+RUN chown -R sandboxuser:sandboxuser /usr/src/app
+
+# Switch to the non-root user
+USER sandboxuser
 
 # Keep the container running so we can exec into it
 CMD ["tail", "-f", "/dev/null"]
