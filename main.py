@@ -1,4 +1,6 @@
 import traceback
+import io
+import tarfile
 from fastapi import FastAPI, HTTPException, Security
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
@@ -78,29 +80,31 @@ class KernelManager:
         
         try:
             # 1. Write code to file inside container
-            code_filename = f"/tmp/exec_{uuid.uuid4().hex}.py"
+            code_filename = f"exec_{uuid.uuid4().hex}.py"
+            code_path = f"/tmp/{code_filename}"
             
-            # Simple way to write file using shell echo (limited by escaping)
-            # Better: use docker put_archive, but that's complex.
-            # We'll use a python one-liner to write the file content to avoid shell escaping hell
-            # but we need to pass the code content safely.
+            # Use tar to upload the file to the container
+            tar_stream = io.BytesIO()
+            with tarfile.open(fileobj=tar_stream, mode='w') as tar:
+                code_bytes = code.encode('utf-8')
+                tar_info = tarfile.TarInfo(name=code_filename)
+                tar_info.size = len(code_bytes)
+                tar.addfile(tar_info, io.BytesIO(code_bytes))
             
-            # Simplest robust way: Exec python with code passed as argument or stdin?
-            # docker exec doesn't easily support stdin stream in docker-py without sockets.
+            tar_stream.seek(0)
+            container.put_archive("/tmp", tar_stream)
             
-            # Let's try passing code as argument to python -c.
-            # But arguments have length limits.
-            
-            # Alternative: Construct a safe command.
-            # Using 'python3 -c ...' directly.
-            
-            cmd = ["python3", "-c", code]
+            # 2. Execute the file
+            cmd = ["python3", code_path]
             
             exec_result = container.exec_run(
                 cmd=cmd,
                 workdir="/usr/src/app"
             )
             
+            # 3. Cleanup
+            container.exec_run(cmd=["rm", code_path])
+
             return {
                 "stdout": exec_result.output.decode("utf-8") if exec_result.output else "",
                 "stderr": "", # docker exec_run merges streams by default unless demux=True
