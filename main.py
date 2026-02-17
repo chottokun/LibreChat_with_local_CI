@@ -66,33 +66,18 @@ class KernelManager:
             raise HTTPException(status_code=500, detail=f"Failed to start sandbox: {str(e)}")
 
     def execute_code(self, session_id: str, code: str):
-        container = self.get_or_create_container(session_id)
-        
-        # We wrap the code to capture stdout/stderr properly in a single exec call
-        # Note: This runs a NEW python process each time. Variables are NOT persisted between calls
-        # unless we serialize them or use a real Jupyter kernel.
-        # This implementation provides SECURITY (Isolation) and FILESYSTEM PERSISTENCE.
-        
-        # Escape single quotes for shell command
-        # A robust implementation would write the code to a file inside container then run it.
-        
+        """
+        Executes code within the container.
+        Returns a dictionary with stdout, stderr, and exit_code.
+        Raises HTTPException for system errors.
+        """
         try:
-            # 1. Write code to file inside container
-            code_filename = f"/tmp/exec_{uuid.uuid4().hex}.py"
+            container = self.get_or_create_container(session_id)
             
-            # Simple way to write file using shell echo (limited by escaping)
-            # Better: use docker put_archive, but that's complex.
-            # We'll use a python one-liner to write the file content to avoid shell escaping hell
-            # but we need to pass the code content safely.
-            
-            # Simplest robust way: Exec python with code passed as argument or stdin?
-            # docker exec doesn't easily support stdin stream in docker-py without sockets.
-            
-            # Let's try passing code as argument to python -c.
-            # But arguments have length limits.
-            
-            # Alternative: Construct a safe command.
-            # Using 'python3 -c ...' directly.
+            # We wrap the code to capture stdout/stderr properly in a single exec call
+            # Note: This runs a NEW python process each time. Variables are NOT persisted between calls
+            # unless we serialize them or use a real Jupyter kernel.
+            # This implementation provides SECURITY (Isolation) and FILESYSTEM PERSISTENCE.
             
             cmd = ["python3", "-c", code]
             
@@ -107,20 +92,27 @@ class KernelManager:
                 "exit_code": exec_result.exit_code
             }
             
+        except HTTPException:
+            raise
         except Exception as e:
             print(traceback.format_exc())
-            return {"error": str(e)}
+            raise HTTPException(status_code=500, detail=f"Execution failed: {str(e)}")
 
 kernel_manager = KernelManager()
 
-# 3. Request Schema
+# 3. Request/Response Schemas
 class CodeRequest(BaseModel):
     code: str
     session_id: str | None = None 
 
+class CodeResponse(BaseModel):
+    stdout: str
+    stderr: str
+    exit_code: int
+
 # 4. Code Execution Endpoint
-@app.post("/run")
-@app.post("/run/exec")
+@app.post("/run", response_model=CodeResponse)
+@app.post("/run/exec", response_model=CodeResponse)
 async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
     """
     Executes code in a sandboxed Docker container.
