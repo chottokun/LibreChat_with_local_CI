@@ -66,7 +66,6 @@ FastAPIコンテナでDocker APIを操作するために、`docker`ライブラ�
 fastapi[standard]
 uvicorn[standard]
 pydantic
-python-multipart
 docker
 ```
 

@@ -173,7 +173,7 @@ fileConfig:
 ```Bash
 
 \# 必要なライブラリを追加  
-pip install fastapi uvicorn pydantic python-multipart  
+pip install fastapi uvicorn pydantic
 \# 環境を固定  
 pip freeze \> requirements.txt
 ```

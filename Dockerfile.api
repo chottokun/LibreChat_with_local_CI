@@ -10,7 +10,7 @@ COPY rce_requirements.txt .
 # The API server itself relies on pyproject.toml (managed by uv, but here we just pip install for simplicity in Docker)
 
 # Install API dependencies directly
-RUN pip install --no-cache-dir fastapi[standard] uvicorn[standard] pydantic python-multipart docker
+RUN pip install --no-cache-dir fastapi uvicorn[standard] pydantic docker
 
 # Copy application code
 COPY main.py .

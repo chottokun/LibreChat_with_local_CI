@@ -66,7 +66,7 @@ This method runs the API server directly on your host machine.
 1.  **Install Dependencies:**
     ```bash
     uv sync
-    # Or manually: uv add fastapi uvicorn pydantic python-multipart docker
+    # Or manually: uv add fastapi uvicorn pydantic docker
     ```
 
 2.  **Start the Server:**
