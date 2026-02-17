@@ -1,4 +1,6 @@
 import traceback
+import io
+import tarfile
 from fastapi import FastAPI, HTTPException, Security
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
@@ -68,48 +70,49 @@ class KernelManager:
     def execute_code(self, session_id: str, code: str):
         container = self.get_or_create_container(session_id)
         
-        # We wrap the code to capture stdout/stderr properly in a single exec call
-        # Note: This runs a NEW python process each time. Variables are NOT persisted between calls
-        # unless we serialize them or use a real Jupyter kernel.
         # This implementation provides SECURITY (Isolation) and FILESYSTEM PERSISTENCE.
+        # We write the code to a temporary file inside the container using 'put_archive'
+        # to avoid shell escaping issues and command line length limits.
         
-        # Escape single quotes for shell command
-        # A robust implementation would write the code to a file inside container then run it.
+        code_filename = f"exec_{uuid.uuid4().hex}.py"
+        container_path = f"/tmp/{code_filename}"
         
         try:
             # 1. Write code to file inside container
-            code_filename = f"/tmp/exec_{uuid.uuid4().hex}.py"
+            tar_stream = io.BytesIO()
+            with tarfile.open(fileobj=tar_stream, mode='w') as tar:
+                code_bytes = code.encode('utf-8')
+                tar_info = tarfile.TarInfo(name=code_filename)
+                tar_info.size = len(code_bytes)
+                tar.addfile(tar_info, io.BytesIO(code_bytes))
             
-            # Simple way to write file using shell echo (limited by escaping)
-            # Better: use docker put_archive, but that's complex.
-            # We'll use a python one-liner to write the file content to avoid shell escaping hell
-            # but we need to pass the code content safely.
+            container.put_archive("/tmp", tar_stream.getvalue())
             
-            # Simplest robust way: Exec python with code passed as argument or stdin?
-            # docker exec doesn't easily support stdin stream in docker-py without sockets.
-            
-            # Let's try passing code as argument to python -c.
-            # But arguments have length limits.
-            
-            # Alternative: Construct a safe command.
-            # Using 'python3 -c ...' directly.
-            
-            cmd = ["python3", "-c", code]
-            
+            # 2. Execute the file
+            # We use demux=True to capture stdout and stderr separately.
             exec_result = container.exec_run(
-                cmd=cmd,
-                workdir="/usr/src/app"
+                cmd=["python3", container_path],
+                workdir="/usr/src/app",
+                demux=True
             )
             
+            stdout, stderr = exec_result.output
+
             return {
-                "stdout": exec_result.output.decode("utf-8") if exec_result.output else "",
-                "stderr": "", # docker exec_run merges streams by default unless demux=True
+                "stdout": stdout.decode("utf-8") if stdout else "",
+                "stderr": stderr.decode("utf-8") if stderr else "",
                 "exit_code": exec_result.exit_code
             }
             
         except Exception as e:
             print(traceback.format_exc())
             return {"error": str(e)}
+        finally:
+            # 3. Cleanup: remove the temporary file
+            try:
+                container.exec_run(cmd=["rm", container_path])
+            except:
+                pass
 
 kernel_manager = KernelManager()
 
