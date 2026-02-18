@@ -1,10 +1,16 @@
-import traceback
+import io
+import tarfile
+import logging
+import os
+import uuid
+import docker
 from fastapi import FastAPI, HTTPException, Security
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
-import docker
-import os
-import uuid
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # 1. Authentication Scheme
 API_KEY = os.environ.get("CUSTOM_RCE_API_KEY", "your_secret_key")
@@ -25,23 +31,35 @@ class KernelManager:
     Manages Docker containers for code execution sessions.
     Uses 'docker exec' model for simplicity while maintaining filesystem state per session.
     """
-    active_kernels = {} # Maps session_id to container_id
+    def __init__(self):
+        self.active_kernels = {} # Maps session_id to container object
 
-    def get_or_create_container(self, session_id: str):
+    def get_or_create_container(self, session_id: str, force_refresh: bool = False):
+        if not force_refresh and session_id in self.active_kernels:
+            return self.active_kernels[session_id]
+
         if session_id in self.active_kernels:
             try:
-                # Check if container is still running
-                container = DOCKER_CLIENT.containers.get(self.active_kernels[session_id])
+                # Re-fetch or refresh container status
+                container = self.active_kernels[session_id]
+                # If we have an object, we can try to reload it to get fresh status
+                try:
+                    container.reload()
+                except docker.errors.NotFound:
+                    # If reload fails, it's gone
+                    del self.active_kernels[session_id]
+                    return self.start_new_container(session_id)
+
                 if container.status == "running":
                     return container
                 else:
-                    # Restart or cleanup if stopped
+                    # Restart if stopped
                     container.start()
                     return container
-            except docker.errors.NotFound:
-                # Container lost, remove from registry
+            except Exception:
+                # Any other error, try to start fresh
                 del self.active_kernels[session_id]
-        
+
         return self.start_new_container(session_id)
 
     def start_new_container(self, session_id: str):
@@ -59,57 +77,65 @@ class KernelManager:
                 network_disabled=True, # Isolation
                 name=f"rce_{session_id}_{uuid.uuid4().hex[:6]}"
             )
-            self.active_kernels[session_id] = container.id
+            self.active_kernels[session_id] = container
             return container
         except Exception as e:
-            print(traceback.format_exc())
-            raise HTTPException(status_code=500, detail=f"Failed to start sandbox: {str(e)}")
+            logger.exception("Failed to start sandbox for session %s", session_id)
+            raise HTTPException(status_code=500, detail="Failed to start sandbox. Please contact an administrator.")
 
     def execute_code(self, session_id: str, code: str):
         container = self.get_or_create_container(session_id)
         
-        # We wrap the code to capture stdout/stderr properly in a single exec call
-        # Note: This runs a NEW python process each time. Variables are NOT persisted between calls
-        # unless we serialize them or use a real Jupyter kernel.
         # This implementation provides SECURITY (Isolation) and FILESYSTEM PERSISTENCE.
+        # We write the code to a temporary file inside the container using 'put_archive'
+        # to avoid shell escaping issues and command line length limits.
         
-        # Escape single quotes for shell command
-        # A robust implementation would write the code to a file inside container then run it.
+        code_filename = f"exec_{uuid.uuid4().hex}.py"
+        container_path = f"/tmp/{code_filename}"
         
         try:
             # 1. Write code to file inside container
-            code_filename = f"/tmp/exec_{uuid.uuid4().hex}.py"
+            def _run_with_retry(km, container, code_content, path, filename):
+                tar_stream = io.BytesIO()
+                with tarfile.open(fileobj=tar_stream, mode='w') as tar:
+                    code_bytes = code_content.encode('utf-8')
+                    tar_info = tarfile.TarInfo(name=filename)
+                    tar_info.size = len(code_bytes)
+                    tar.addfile(tar_info, io.BytesIO(code_bytes))
+                
+                container.put_archive("/tmp", tar_stream.getvalue())
+                
+                return container.exec_run(
+                    cmd=["python3", path],
+                    workdir="/usr/src/app",
+                    demux=True
+                )
+
+            try:
+                exec_result = _run_with_retry(self, container, code, container_path, code_filename)
+            except (docker.errors.APIError, docker.errors.NotFound):
+                # Optimistic assumption failed: container might be stopped or gone
+                # Recovery: Force refresh and retry once
+                container = self.get_or_create_container(session_id, force_refresh=True)
+                exec_result = _run_with_retry(self, container, code, container_path, code_filename)
             
-            # Simple way to write file using shell echo (limited by escaping)
-            # Better: use docker put_archive, but that's complex.
-            # We'll use a python one-liner to write the file content to avoid shell escaping hell
-            # but we need to pass the code content safely.
-            
-            # Simplest robust way: Exec python with code passed as argument or stdin?
-            # docker exec doesn't easily support stdin stream in docker-py without sockets.
-            
-            # Let's try passing code as argument to python -c.
-            # But arguments have length limits.
-            
-            # Alternative: Construct a safe command.
-            # Using 'python3 -c ...' directly.
-            
-            cmd = ["python3", "-c", code]
-            
-            exec_result = container.exec_run(
-                cmd=cmd,
-                workdir="/usr/src/app"
-            )
-            
+            stdout, stderr = exec_result.output
+
             return {
-                "stdout": exec_result.output.decode("utf-8") if exec_result.output else "",
-                "stderr": "", # docker exec_run merges streams by default unless demux=True
+                "stdout": stdout.decode("utf-8") if stdout else "",
+                "stderr": stderr.decode("utf-8") if stderr else "",
                 "exit_code": exec_result.exit_code
             }
             
         except Exception as e:
-            print(traceback.format_exc())
-            return {"error": str(e)}
+            logger.exception("Error executing code in session %s", session_id)
+            return {"error": "An internal error occurred during code execution."}
+        finally:
+            # 3. Cleanup: remove the temporary file
+            try:
+                container.exec_run(cmd=["rm", container_path])
+            except:
+                pass
 
 kernel_manager = KernelManager()
 

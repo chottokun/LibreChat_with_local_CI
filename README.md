@@ -93,7 +93,11 @@ This method runs the API server directly on your host machine.
     -   Authenticates requests using `X-API-Key`.
     -   Manages Docker containers via `docker-py` SDK.
 
-2.  **Sandbox Containers**:
+2.  **Docker Socket Proxy**:
+    -   When running via Docker Compose, a `docker-proxy` service (`tecnativa/docker-socket-proxy`) is used to provide a security-filtered interface to the Docker daemon.
+    -   This prevents the API container from having full, unrestricted access to the host's Docker socket, mitigating potential container escape vulnerabilities.
+
+3.  **Sandbox Containers**:
     -   Based on `custom-rce-kernel:latest` image.
     -   **Isolation**: `network_disabled=True` prevents internet access.
     -   **Resource Limits**: 0.5 CPU cores, 512MB RAM.
