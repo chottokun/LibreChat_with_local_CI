@@ -27,55 +27,46 @@ def kernel_manager():
 def test_get_or_create_container_running(kernel_manager):
     # Setup
     session_id = "test_session"
-    container_id = "test_container_id"
-    kernel_manager.active_kernels[session_id] = container_id
-
     mock_container = MagicMock()
     mock_container.status = "running"
-    main.DOCKER_CLIENT.containers.get.return_value = mock_container
+    kernel_manager.active_kernels[session_id] = mock_container
 
     # Execute
     container = kernel_manager.get_or_create_container(session_id)
 
     # Assert
     assert container == mock_container
-    main.DOCKER_CLIENT.containers.get.assert_called_once_with(container_id)
-    mock_container.start.assert_not_called()
+    main.DOCKER_CLIENT.containers.get.assert_not_called()
+    mock_container.reload.assert_not_called()
 
 def test_get_or_create_container_stopped(kernel_manager):
     # Setup
     session_id = "test_session"
-    container_id = "test_container_id"
-    kernel_manager.active_kernels[session_id] = container_id
-
     mock_container = MagicMock()
     mock_container.status = "exited"
-    main.DOCKER_CLIENT.containers.get.return_value = mock_container
+    kernel_manager.active_kernels[session_id] = mock_container
 
-    # Execute
-    container = kernel_manager.get_or_create_container(session_id)
+    # Execute - Force refresh to hit the logic that reloads and restarts
+    container = kernel_manager.get_or_create_container(session_id, force_refresh=True)
 
     # Assert
     assert container == mock_container
-    main.DOCKER_CLIENT.containers.get.assert_called_once_with(container_id)
+    mock_container.reload.assert_called_once()
     mock_container.start.assert_called_once()
 
-def test_get_or_create_container_not_found(kernel_manager):
+def test_get_or_create_container_missing_during_reload(kernel_manager):
     # Setup
     session_id = "test_session"
-    container_id = "test_container_id"
-    kernel_manager.active_kernels[session_id] = container_id
-
-    # Mock containers.get to raise NotFound
-    main.DOCKER_CLIENT.containers.get.side_effect = docker.errors.NotFound("Container not found")
+    mock_container = MagicMock()
+    mock_container.reload.side_effect = docker.errors.NotFound("Gone")
+    kernel_manager.active_kernels[session_id] = mock_container
 
     # Mock start_new_container
     new_container = MagicMock()
     with patch.object(KernelManager, 'start_new_container', return_value=new_container) as mock_start_new:
         # Execute
-        container = kernel_manager.get_or_create_container(session_id)
+        container = kernel_manager.get_or_create_container(session_id, force_refresh=True)
 
         # Assert
         assert container == new_container
-        assert session_id not in kernel_manager.active_kernels or kernel_manager.active_kernels[session_id] != container_id
         mock_start_new.assert_called_once_with(session_id)
