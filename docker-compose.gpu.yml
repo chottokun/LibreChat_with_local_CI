@@ -1,0 +1,13 @@
+services:
+  code-interpreter-api:
+    environment:
+      - RCE_GPU_ENABLED=true
+      - RCE_MEM_LIMIT=2g
+      - RCE_IMAGE_NAME=custom-rce-kernel-gpu:latest
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

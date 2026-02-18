@@ -1,0 +1,16 @@
+# Dockerfile for GPU-enabled RCE
+FROM nvidia/cuda:12.1.0-base-ubuntu22.04
+
+# Install Python and dependencies
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /usr/src/app
+
+COPY rce_requirements.txt .
+RUN pip3 install --no-cache-dir -r rce_requirements.txt
+
+# Keep the container running
+CMD ["tail", "-f", "/dev/null"]
