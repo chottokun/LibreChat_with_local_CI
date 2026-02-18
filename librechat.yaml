@@ -1,10 +1,16 @@
-version: 1.0.0
+version: "1.3.0"
 cache: true
-# ... other settings can go here
-
-codeInterpreter:
-  enabled: true
 
 fileConfig:
   enabled: true
   uploadDir: ./uploads
+
+endpoints:
+  custom:
+    - name: "Ollama"
+      baseURL: "http://ollama:11434/v1/"
+      apiKey: "ollama"
+      models:
+        default: ["qwen2.5-coder:3b"]
+        fetch: true
+      titleModel: "current_model"

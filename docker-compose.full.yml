@@ -1,0 +1,81 @@
+version: '3.8'
+
+services:
+  api:
+    image: ghcr.io/danny-avila/librechat-rag-api-dev-lite:latest
+    container_name: librechat-rag-api
+    restart: always
+    environment:
+      - DB_PROXY=false
+    networks:
+      - librechat-network
+
+  mongodb:
+    image: mongo:latest
+    container_name: librechat-mongodb
+    restart: always
+    volumes:
+      - mongodb-data:/data/db
+    networks:
+      - librechat-network
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.7.3
+    container_name: librechat-meilisearch
+    restart: always
+    environment:
+      - MEILI_HOST=http://0.0.0.0:7700
+      - MEILI_NO_ANALYTICS=true
+      - MEILI_MASTER_KEY=your_master_key
+    volumes:
+      - meili-data:/meili_data
+    networks:
+      - librechat-network
+
+  librechat:
+    image: ghcr.io/danny-avila/librechat:latest
+    container_name: librechat
+    restart: always
+    ports:
+      - "3080:3080"
+    depends_on:
+      - mongodb
+      - meilisearch
+      - code-interpreter-api
+    environment:
+      - MONGO_URI=mongodb://mongodb:27017/LibreChat
+      - MEILI_HOST=http://meilisearch:7700
+      - MEILI_MASTER_KEY=your_master_key
+      - CONFIG_PATH=/app/librechat.yaml
+      - LIBRECHAT_CODE_BASEURL=http://librechat_code_interpreter_api:8000
+      - LIBRECHAT_CODE_API_KEY=your_secret_key
+      - CONFIG_BYPASS_VALIDATION=true
+      - ALLOW_REGISTRATION=true
+      - JWT_SECRET=32_char_secret_key_used_for_testing_123
+      - JWT_REFRESH_SECRET=32_char_refresh_key_used_for_testing_456
+      - OPENAI_API_KEY=sk-dummy-key-for-ui-testing
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_MODELS=qwen2.5-coder:3b
+      - CREDS_KEY=f34be427ebaeded2940f7d30100edb51
+      - CREDS_IV=12345678901234567890123456789012
+    volumes:
+      - ./librechat.yaml:/app/librechat.yaml
+    networks:
+      - librechat-network
+
+  # Override existing services to use the same network
+  docker-proxy:
+    networks:
+      - librechat-network
+
+  code-interpreter-api:
+    networks:
+      - librechat-network
+
+networks:
+  librechat-network:
+    driver: bridge
+
+volumes:
+  mongodb-data:
+  meili-data:
