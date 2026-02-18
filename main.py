@@ -4,9 +4,12 @@ import logging
 import os
 import uuid
 import docker
-from fastapi import FastAPI, HTTPException, Security
+from fastapi import FastAPI, HTTPException, Security, UploadFile, File, Form
 from fastapi.security import APIKeyHeader
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
+from typing import List, Optional
+import shutil
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -23,7 +26,7 @@ async def get_api_key(api_key: str = Security(api_key_header)):
 
 app = FastAPI()
 DOCKER_CLIENT = docker.from_env()
-RCE_IMAGE_NAME = "custom-rce-kernel:latest"
+RCE_IMAGE_NAME = os.environ.get("RCE_IMAGE_NAME", "custom-rce-kernel:latest")
 
 # 2. Kernel Manager for Session Management
 class KernelManager:
@@ -63,25 +66,76 @@ class KernelManager:
         return self.start_new_container(session_id)
 
     def start_new_container(self, session_id: str):
-        # Create a unique volume for this session if needed (optional for simple exec)
-        # For now, we rely on the container's internal filesystem persisting while it runs.
+        # Configuration from environment variables
+        mem_limit = os.environ.get("RCE_MEM_LIMIT", "512m")
+        cpu_limit_nano = int(os.environ.get("RCE_CPU_LIMIT", "500000000")) # 0.5 CPU default
+        network_enabled = os.environ.get("RCE_NETWORK_ENABLED", "false").lower() == "true"
+        gpu_enabled = os.environ.get("RCE_GPU_ENABLED", "false").lower() == "true"
         
+        device_requests = []
+        if gpu_enabled:
+            device_requests.append(
+                docker.types.DeviceRequest(count=-1, capabilities=[['gpu']])
+            )
+
         try:
             container = DOCKER_CLIENT.containers.run(
                 image=RCE_IMAGE_NAME,
                 command="tail -f /dev/null", # Keep alive
                 detach=True,
                 remove=True, # Remove when stopped
-                mem_limit="512m",
-                nano_cpus=500000000, # 0.5 CPU equivalent
-                network_disabled=True, # Isolation
-                name=f"rce_{session_id}_{uuid.uuid4().hex[:6]}"
+                mem_limit=mem_limit,
+                nano_cpus=cpu_limit_nano,
+                network_disabled=not network_enabled,
+                device_requests=device_requests,
+                name=f"rce_{session_id}_{uuid.uuid4().hex[:6]}",
+                working_dir="/usr/src/app"
             )
+            # Ensure workspace exists
+            container.exec_run(cmd=["mkdir", "-p", "/usr/src/app"])
             self.active_kernels[session_id] = container
             return container
         except Exception as e:
             logger.exception("Failed to start sandbox for session %s", session_id)
             raise HTTPException(status_code=500, detail="Failed to start sandbox. Please contact an administrator.")
+
+    def upload_file(self, session_id: str, filename: str, content: bytes):
+        container = self.get_or_create_container(session_id)
+        
+        tar_stream = io.BytesIO()
+        with tarfile.open(fileobj=tar_stream, mode='w') as tar:
+            tar_info = tarfile.TarInfo(name=filename)
+            tar_info.size = len(content)
+            tar.addfile(tar_info, io.BytesIO(content))
+        
+        container.put_archive("/usr/src/app", tar_stream.getvalue())
+        logger.info("Uploaded file %s to session %s", filename, session_id)
+
+    def download_file(self, session_id: str, filename: str):
+        container = self.get_or_create_container(session_id)
+        try:
+            # get_archive returns a tuple: (stream, stat)
+            bits, stat = container.get_archive(f"/usr/src/app/{filename}")
+            
+            # Extract from tar bits
+            tar_stream = io.BytesIO(b"".join(bits))
+            with tarfile.open(fileobj=tar_stream, mode='r') as tar:
+                f = tar.extractfile(filename)
+                if f:
+                    return f.read(), stat['mtime']
+            raise FileNotFoundError()
+        except Exception as e:
+            logger.error("Failed to download file %s from session %s: %s", filename, session_id, e)
+            raise HTTPException(status_code=404, detail="File not found")
+
+    def list_files(self, session_id: str):
+        container = self.get_or_create_container(session_id)
+        # We list files and their sizes/mtimes if possible, or just names for now
+        res = container.exec_run(cmd=["ls", "-1", "/usr/src/app"])
+        if res.exit_code == 0:
+            files = res.output.decode('utf-8').splitlines()
+            return [f for f in files if f]
+        return []
 
     def execute_code(self, session_id: str, code: str):
         """
@@ -96,19 +150,21 @@ class KernelManager:
         # to avoid shell escaping issues and command line length limits.
         
         code_filename = f"exec_{uuid.uuid4().hex}.py"
-        container_path = f"/tmp/{code_filename}"
+        container_path = f"/usr/src/app/{code_filename}"
         
         try:
             # 1. Write code to file inside container
             def _run_with_retry(km, container, code_content, path, filename):
                 tar_stream = io.BytesIO()
                 with tarfile.open(fileobj=tar_stream, mode='w') as tar:
+                    # Injected code to ensure /usr/src/app is in path
+                    # although running from there should handle it.
                     code_bytes = code_content.encode('utf-8')
                     tar_info = tarfile.TarInfo(name=filename)
                     tar_info.size = len(code_bytes)
                     tar.addfile(tar_info, io.BytesIO(code_bytes))
                 
-                container.put_archive("/tmp", tar_stream.getvalue())
+                container.put_archive("/usr/src/app", tar_stream.getvalue())
                 
                 return container.exec_run(
                     cmd=["python3", path],
@@ -149,15 +205,20 @@ kernel_manager = KernelManager()
 # 3. Request/Response Schemas
 class CodeRequest(BaseModel):
     code: str
-    session_id: str | None = None 
+    lang: Optional[str] = "py"
+    session_id: Optional[str] = None
+    user_id: Optional[str] = None
+    files: Optional[List[str]] = []
 
 class CodeResponse(BaseModel):
     stdout: str
     stderr: str
     exit_code: int
+    output: Optional[str] = ""
+    files: Optional[List[str]] = []
 
-# 4. Code Execution Endpoint
-@app.post("/run", response_model=CodeResponse)
+# 4. Endpoints
+@app.post("/exec", response_model=CodeResponse)
 @app.post("/run/exec", response_model=CodeResponse)
 async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
     """
@@ -168,7 +229,55 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
     # Run in sandbox
     result = kernel_manager.execute_code(session_id, req.code)
     
-    return result
+    # List generated files (simplified: list all in workspace)
+    # In a more advanced version, we would track changes.
+    current_files = kernel_manager.list_files(session_id)
+    
+    return {
+        "stdout": result["stdout"],
+        "stderr": result["stderr"],
+        "exit_code": result["exit_code"],
+        "output": result["stdout"], # Simplified
+        "files": current_files
+    }
+
+@app.post("/upload")
+async def upload_files(
+    entity_id: str = Form(...),
+    files: List[UploadFile] = File(...),
+    key: str = Security(get_api_key)
+):
+    """
+    Uploads files to a specific session sandbox.
+    """
+    session_id = entity_id
+    for file in files:
+        content = await file.read()
+        kernel_manager.upload_file(session_id, file.filename, content)
+    
+    return {"status": "ok", "files": [f.filename for f in files]}
+
+@app.get("/files/{session_id}")
+async def list_session_files(session_id: str, key: str = Security(get_api_key)):
+    """
+    Lists files in a session's sandbox.
+    """
+    files = kernel_manager.list_files(session_id)
+    return {"files": files}
+
+@app.get("/download/{session_id}/{filename}")
+async def download_session_file(session_id: str, filename: str, key: str = Security(get_api_key)):
+    """
+    Downloads a file from a session's sandbox.
+    """
+    content, mtime = kernel_manager.download_file(session_id, filename)
+    return Response(
+        content=content,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}"
+        }
+    )
 
 @app.get("/health")
 def health_check():

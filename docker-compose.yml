@@ -21,6 +21,10 @@ services:
     environment:
       - CUSTOM_RCE_API_KEY=your_secret_key
       - DOCKER_HOST=tcp://docker-proxy:2375
+      - RCE_NETWORK_ENABLED=false
+      - RCE_MEM_LIMIT=512m
+      - RCE_CPU_LIMIT=500000000
+      - RCE_GPU_ENABLED=false
     depends_on:
       - docker-proxy
     restart: unless-stopped
