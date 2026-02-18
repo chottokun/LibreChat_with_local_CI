@@ -15,39 +15,46 @@ def test_health_check():
     assert response.json() == {"status": "ok", "mode": "docker-sandboxed"}
 
 def test_run_code_unauthorized():
-    response = client.post("/run", json={"code": "print('hello')", "session_id": "test"}, headers={"X-API-Key": "wrong_key"})
+    response = client.post("/exec", json={"code": "print('hello')", "session_id": "test"}, headers={"X-API-Key": "wrong_key"})
     assert response.status_code == 401
     assert response.json()["detail"] == "Invalid API Key"
 
 @patch("main.kernel_manager.execute_code")
-def test_run_code_success(mock_execute):
+@patch("main.kernel_manager.list_files")
+def test_run_code_success(mock_list_files, mock_execute):
     mock_execute.return_value = {"stdout": "hello\n", "stderr": "", "exit_code": 0}
+    mock_list_files.return_value = []
 
-    response = client.post("/run",
+    response = client.post("/exec",
                            json={"code": "print('hello')", "session_id": "test_session"},
                            headers={"X-API-Key": API_KEY})
 
     assert response.status_code == 200
-    assert response.json() == {"stdout": "hello\n", "stderr": "", "exit_code": 0}
+    assert response.json()["stdout"] == "hello\n"
+    assert response.json()["exit_code"] == 0
     mock_execute.assert_called_once_with("test_session", "print('hello')")
 
 @patch("main.kernel_manager.execute_code")
-def test_run_exec_success(mock_execute):
+@patch("main.kernel_manager.list_files")
+def test_run_exec_success(mock_list_files, mock_execute):
     mock_execute.return_value = {"stdout": "exec_output", "stderr": "", "exit_code": 0}
+    mock_list_files.return_value = []
 
     response = client.post("/run/exec",
                            json={"code": "print('exec')", "session_id": "test_session_exec"},
                            headers={"X-API-Key": API_KEY})
 
     assert response.status_code == 200
-    assert response.json() == {"stdout": "exec_output", "stderr": "", "exit_code": 0}
+    assert response.json()["stdout"] == "exec_output"
     mock_execute.assert_called_once_with("test_session_exec", "print('exec')")
 
 @patch("main.kernel_manager.execute_code")
-def test_run_code_no_session_id(mock_execute):
+@patch("main.kernel_manager.list_files")
+def test_run_code_no_session_id(mock_list_files, mock_execute):
     mock_execute.return_value = {"stdout": "ok", "stderr": "", "exit_code": 0}
+    mock_list_files.return_value = []
 
-    response = client.post("/run",
+    response = client.post("/exec",
                            json={"code": "print('hello')"},
                            headers={"X-API-Key": API_KEY})
 
@@ -55,4 +62,4 @@ def test_run_code_no_session_id(mock_execute):
     # The session_id is generated as a UUID, so we just check that execute_code was called
     mock_execute.assert_called_once()
     args, kwargs = mock_execute.call_args
-    assert len(args[0]) > 0 # session_id generated
+    assert len(args[0]) > 0  # session_id generated

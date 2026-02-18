@@ -59,18 +59,23 @@ def test_get_or_create_container_missing_during_reload(kernel_manager):
     # Setup
     session_id = "test_session"
     mock_container = MagicMock()
-    mock_container.reload.side_effect = docker.errors.NotFound("Gone")
+    # docker.errors.NotFound requires a response object
+    mock_response = MagicMock()
+    mock_response.status_code = 404
+    mock_response.reason = "Not Found"
+    mock_container.reload.side_effect = docker.errors.NotFound("Gone", response=mock_response)
     kernel_manager.active_kernels[session_id] = mock_container
 
     # Mock start_new_container
     new_container = MagicMock()
-    with patch.object(KernelManager, 'start_new_container', return_value=new_container) as mock_start_new:
-        # Execute
-        container = kernel_manager.get_or_create_container(session_id, force_refresh=True)
+    kernel_manager.start_new_container = MagicMock(return_value=new_container)
 
-        # Assert
-        assert container == new_container
-        mock_start_new.assert_called_once_with(session_id)
+    # Execute
+    container = kernel_manager.get_or_create_container(session_id, force_refresh=True)
+
+    # Assert
+    assert container == new_container
+    kernel_manager.start_new_container.assert_called_once_with(session_id)
 
 def test_start_new_container_success(kernel_manager):
     session_id = "new_session"
