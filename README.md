@@ -1,113 +1,180 @@
 # LibreChat Custom Code Interpreter API
 
-This project provides a secure, sandboxed Code Interpreter API for LibreChat, enabling Python code execution within isolated Docker containers.
+A secure, sandboxed Code Interpreter API for LibreChat, enabling Python code execution within isolated Docker containers. Supports Ollama local models for fully offline AI + code execution.
 
 ## Features
 
-- **Sandboxed Execution**: Code runs in isolated Docker containers with no network access.
-- **Session Persistence**: Maintains filesystem state per session (files created in one run are available in the next).
-- **Customizable Environment**: Pre-installed scientific libraries (`pandas`, `numpy`, `scipy`, `matplotlib`) via a custom Docker image.
-- **Secure API**: Protected by API Key authentication.
+- **Sandboxed Execution**: Code runs in isolated Docker containers with configurable memory/CPU limits and no network access by default.
+- **LibreChat Compatible**: Fully aligns with LibreChat's Code Interpreter API spec (`/exec`, `/upload`, `/download`, `/files`).
+- **Session Persistence**: Maintains filesystem state per session (uploaded files and generated outputs are preserved).
+- **Customizable Environment**: Pre-installed scientific libraries (`pandas`, `numpy`, etc.) via a custom Docker image.
+- **Ollama Integration**: Works with local Ollama models (e.g. `qwen2.5-coder:3b`) for fully offline operation.
+- **GPU Support**: Optional CUDA-enabled sandbox image for GPU-accelerated code execution.
+- **Secure API**: Protected by API Key authentication and a Docker Socket Proxy.
+- **Configurable via Env Vars**: All resource limits and behavior controlled by environment variables.
 
 ## Prerequisites
 
 - **Docker**: Must be installed and running.
-- **Python 3.11+**: For local development (optional if using Docker Compose).
-- **uv**: Recommended for Python package management (optional if using Docker Compose).
+- **Python 3.13+**: For local development (optional if using Docker Compose).
+- **uv**: Recommended for Python package management.
 
 ---
 
-## Setup & Installation
+## Quick Start: Full LibreChat Stack with Ollama
 
-### 1. Build the Sandbox Environment (Important)
+This is the recommended setup for running LibreChat + Code Interpreter + Ollama together.
 
-Before running the API server, you must build the Docker image that will be used for sandboxed code execution.
+### 1. Build the Sandbox Image
 
 ```bash
 docker build -f Dockerfile.rce -t custom-rce-kernel:latest .
 ```
-*This image (`custom-rce-kernel`) contains the Python environment and libraries (pandas, etc.) used to execute user code.*
+
+### 2. Connect Ollama to the LibreChat Network
+
+If you have Ollama running as a Docker container:
+
+```bash
+docker network connect librechat-network ollama
+```
+
+### 3. Start the Full Stack
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.full.yml up -d
+```
+
+LibreChat will be available at **http://localhost:3080**.
+
+### 4. Configure Environment
+
+Copy and edit the template:
+
+```bash
+cp .env.librechat .env
+# Edit .env with your actual secrets (JWT_SECRET, CREDS_KEY, etc.)
+```
 
 ---
 
-## Usage Method 1: Docker Compose (Recommended)
+## Setup: Code Interpreter API Only
 
-This method runs the API server itself in a Docker container.
+### Docker Compose (Recommended)
 
-1.  **Start the API Server:**
-    ```bash
-    docker-compose up -d --build
-    ```
+```bash
+# Build sandbox image first
+docker build -f Dockerfile.rce -t custom-rce-kernel:latest .
 
-2.  **Configuration for LibreChat:**
-    Update your LibreChat `.env` file:
-    ```dotenv
-    # If LibreChat is also in Docker:
-    LIBRECHAT_CODE_BASEURL=http://host.docker.internal:8000/run/exec
-    
-    # If LibreChat is running locally on the host:
-    # LIBRECHAT_CODE_BASEURL=http://localhost:8000/run/exec
-    
-    LIBRECHAT_CODE_API_KEY=your_secret_key
-    ```
-    *Note: `host.docker.internal` allows the LibreChat container to talk to the API container via the host's port mapping.*
+# Start the API
+docker compose up -d --build
+```
 
-3.  **Stop the Server:**
-    ```bash
-    docker-compose down
-    ```
+Configure LibreChat to use it:
+```dotenv
+LIBRECHAT_CODE_BASEURL=http://host.docker.internal:8000
+LIBRECHAT_CODE_API_KEY=your_secret_key
+```
+
+### Local Development
+
+```bash
+uv sync
+uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
 
 ---
 
-## Usage Method 2: Local Execution with `uv`
+## GPU Support
 
-This method runs the API server directly on your host machine.
+For CUDA-accelerated code execution:
 
-1.  **Install Dependencies:**
-    ```bash
-    uv sync
-    # Or manually: uv add fastapi uvicorn pydantic python-multipart docker
-    ```
+```bash
+# Build GPU-enabled sandbox image
+docker build -f Dockerfile.rce.gpu -t custom-rce-kernel:gpu .
 
-2.  **Start the Server:**
-    ```bash
-    uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
-    ```
-
-3.  **Configuration for LibreChat:**
-    Update your LibreChat `.env` file. Since the API is running on your host IP:
-    ```dotenv
-    # Replace with your actual Host IP (e.g., 192.168.1.x)
-    LIBRECHAT_CODE_BASEURL=http://YOUR_HOST_IP:8000/run/exec
-    LIBRECHAT_CODE_API_KEY=your_secret_key
-    ```
+# Start with GPU support
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+```
 
 ---
 
-## Technical Details
+## Configuration
 
-### Architecture
+All settings are controlled via environment variables:
 
-1.  **FastAPI Gateway (`main.py`)**:
-    -   Receives code execution requests from LibreChat.
-    -   Authenticates requests using `X-API-Key`.
-    -   Manages Docker containers via `docker-py` SDK.
+| Variable | Default | Description |
+|---|---|---|
+| `CUSTOM_RCE_API_KEY` | `your_secret_key` | API key for authentication |
+| `RCE_IMAGE_NAME` | `custom-rce-kernel:latest` | Docker image for sandboxes |
+| `RCE_MEM_LIMIT` | `512m` | Memory limit per sandbox |
+| `RCE_CPU_LIMIT` | `500000000` | CPU quota in nanoseconds (0.5 CPU) |
+| `RCE_NETWORK_ENABLED` | `false` | Allow network access in sandbox |
+| `RCE_GPU_ENABLED` | `false` | Enable GPU passthrough |
 
-2.  **Docker Socket Proxy**:
-    -   When running via Docker Compose, a `docker-proxy` service (`tecnativa/docker-socket-proxy`) is used to provide a security-filtered interface to the Docker daemon.
-    -   This prevents the API container from having full, unrestricted access to the host's Docker socket, mitigating potential container escape vulnerabilities.
+---
 
-3.  **Sandbox Containers**:
-    -   Based on `custom-rce-kernel:latest` image.
-    -   **Isolation**: `network_disabled=True` prevents internet access.
-    -   **Resource Limits**: 0.5 CPU cores, 512MB RAM.
-    -   **Persistence**: The container remains running for the duration of the session (until stopped/removed), allowing file persistence in `/usr/src/app` or `/tmp`.
-    -   **Execution**: Uses `docker exec` to run Python code as a new process within the container. Note that variable state (memory) is not persisted between calls, but files are.
+## API Reference
 
-### File Structure
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/health` | Health check |
+| `POST` | `/exec` | Execute Python code |
+| `POST` | `/run/exec` | Alias for `/exec` (LibreChat compat) |
+| `POST` | `/upload` | Upload files to a session |
+| `GET` | `/files/{session_id}` | List files in a session |
+| `GET` | `/download/{session_id}/{filename}` | Download a file |
 
--   `main.py`: The API server application.
--   `Dockerfile.rce`: Definition for the sandboxed execution environment (contains libraries).
--   `Dockerfile.api`: Definition for the API server container (for Docker Compose).
--   `rce_requirements.txt`: Python libraries installed in the sandbox.
--   `docker-compose.yml`: Service definition for running the API server.
+### Request Body for `/exec`
+
+```json
+{
+  "code": "print(2 + 2)",
+  "lang": "py",
+  "session_id": "optional-uuid",
+  "user_id": "optional-user-id"
+}
+```
+
+### Response
+
+```json
+{
+  "stdout": "4\n",
+  "stderr": "",
+  "exit_code": 0,
+  "output": "4\n",
+  "files": []
+}
+```
+
+---
+
+## Running Tests
+
+```bash
+uv run pytest tests/ -v
+```
+
+All 12 tests should pass, covering:
+- API authentication and endpoints
+- Kernel manager session lifecycle
+- Container recovery on failure
+- Docker socket security proxy
+
+---
+
+## Architecture
+
+```
+LibreChat (port 3080)
+    │
+    ├── MongoDB (session storage)
+    ├── Meilisearch (search)
+    └── Code Interpreter API (port 8000)
+            │
+            ├── Docker Socket Proxy (security layer)
+            └── RCE Sandbox Containers (isolated Python)
+
+Ollama (port 11434) ──── librechat-network ────► LibreChat
+```
