@@ -56,6 +56,9 @@ services:
       - OPENAI_API_KEY=sk-dummy-key-for-ui-testing
       - OLLAMA_BASE_URL=http://ollama:11434
       - OLLAMA_MODELS=qwen2.5-coder:3b
+      - EXTERNAL_API_URL=${EXTERNAL_API_URL}
+      - EXTERNAL_API_KEY=${EXTERNAL_API_KEY}
+      - EXTERNAL_LLM_MODEL=${EXTERNAL_LLM_MODEL}
       - CREDS_KEY=f34be427ebaeded2940f7d30100edb51
       - CREDS_IV=12345678901234567890123456789012
     volumes:

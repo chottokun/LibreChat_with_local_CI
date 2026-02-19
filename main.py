@@ -16,7 +16,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # 1. Authentication Scheme
-API_KEY = os.environ.get("CUSTOM_RCE_API_KEY", "your_secret_key")
+API_KEY = os.environ.get("LIBRECHAT_CODE_API_KEY", "your_secret_key")
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
 
 async def get_api_key(api_key: str = Security(api_key_header)):

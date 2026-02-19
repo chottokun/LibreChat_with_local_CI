@@ -139,14 +139,50 @@ LIBRECHAT\_CODE\_API\_KEY=your\_secret\_key\_from\_step2a
 
 ### **LibreChat librechat.yamlでのCode Interpreter有効化**
 
-.envファイルでエンドポイントを定義している場合、librechat.yamlにはCode Interpreterを有効化する設定が通常必要になります。
+.envファイルでエンドポイントを定義している場合、librechat.yamlにはCode Interpreterを有効化する設定が必要になります。
 
 ```YAML
-
-codeInterpreter:  
+codeInterpreter:
   enabled: true
 ```
+
+### **追加設定: 外部LLMプロバイダー（OpenAI互換）の統合**
+
+Sakura AIやDeepSeekなどの外部OpenAI互換プロキシを統合する場合、`librechat.yaml` にカスタムエンドポイントを追加します。セキュリティ向上のため、APIキーやURLは環境変数経由で記述することを推奨します。
+
+**1. .envファイルへの追記**
+`.env` ファイルに以下の変数を追加します（お使いのプロバイダーに合わせて値を設定してください）。
+
+```env
+# External AI (OpenAI-Compatible)
+EXTERNAL_API_URL=https://api.ai.sakura.ad.jp/v1/
+EXTERNAL_API_KEY=your_actual_api_key
+EXTERNAL_LLM_MODEL=Qwen3-Coder-30B-A3B-Instruct
+```
+
+**2. librechat.yaml の設定**
+`endpoints.custom` セクションにプレースホルダー `${VARIABLE_NAME}` を用いて登録します。
+
+```YAML
+version: "1.1.5"
+endpoints:
+  custom:
+    - name: "SakuraAI"
+      apiKey: "${EXTERNAL_API_KEY}"
+      baseURL: "${EXTERNAL_API_URL}"
+      models:
+        default: ["${EXTERNAL_LLM_MODEL}"]
+        fetch: true
+      titleConvo: true
+      summarize: true
+      modelDisplayLabel: "Sakura Model"
+```
+
 LibreChatを再起動して設定を反映させます。
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.full.yml up -d
+```
 
 ## ---
 

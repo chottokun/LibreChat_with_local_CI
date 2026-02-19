@@ -1,4 +1,5 @@
-version: "1.3.0"
+version: "1.1.5"
+
 cache: true
 
 fileConfig:
@@ -7,10 +8,12 @@ fileConfig:
 
 endpoints:
   custom:
-    - name: "Ollama"
-      baseURL: "http://ollama:11434/v1/"
-      apiKey: "ollama"
+    - name: "SakuraAI"
+      apiKey: "${EXTERNAL_API_KEY}"
+      baseURL: "${EXTERNAL_API_URL}"
       models:
-        default: ["qwen2.5-coder:3b"]
+        default: ["${EXTERNAL_LLM_MODEL}"]
         fetch: true
-      titleModel: "current_model"
+      titleConvo: true
+      summarize: true
+      modelDisplayLabel: "Sakura Model"
