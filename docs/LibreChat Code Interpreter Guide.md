@@ -184,6 +184,31 @@ LibreChatを再起動して設定を反映させます。
 docker compose -f docker-compose.yml -f docker-compose.full.yml up -d
 ```
 
+### **参考: LiteLLM を使用した一元管理**
+
+LiteLLMをプロキシとして使用することで、Bedrock, Anthropic, Gemini, Azureなど100種類以上のモデルを一つのOpenAI互換エンドポイントとしてLibreChatから利用可能になります。
+
+**1. librechat.yaml の設定例**
+```YAML
+endpoints:
+  custom:
+    - name: "LiteLLM-Proxy"
+      apiKey: "${LITELLM_KEY}" # .envに値を設定
+      baseURL: "http://host.docker.internal:4000/v1"
+      models:
+        default: ["gpt-4", "claude-3-opus", "gemini-pro"]
+        fetch: true # LiteLLMの /models から自動取得する場合
+      titleConvo: true
+      summarize: true
+      # Anthropic等のプロバイダー固有パラメータでエラーが出る場合
+      # dropParams: ["stop", "frequency_penalty"] 
+```
+
+**2. LiteLLM利用のメリット**
+- **APIキーの一元管理**: LibreChat側にはLiteLLMのキー1つを設定するだけで済みます。
+- **コスト管理**: LiteLLM側でモデルごとの使用量ログやコスト集計が可能です。
+- **モデル名の統一**: プロバイダーを問わず、OpenAI互換の形式でシームレスに呼び出せます。
+
 ## ---
 
 **4\. ファイル添付の有効化**
