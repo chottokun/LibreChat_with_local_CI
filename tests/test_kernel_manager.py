@@ -2,6 +2,7 @@ import sys
 from unittest.mock import MagicMock, patch
 import pytest
 import docker
+import time
 from fastapi import HTTPException
 
 # We need to mock docker before importing main because main.py calls docker.from_env() at module level
@@ -30,7 +31,10 @@ def test_get_or_create_container_running(kernel_manager):
     session_id = "test_session"
     mock_container = MagicMock()
     mock_container.status = "running"
-    kernel_manager.active_kernels[session_id] = mock_container
+    kernel_manager.active_kernels[session_id] = {
+        "container": mock_container,
+        "last_accessed": time.time()
+    }
 
     # Execute
     container = kernel_manager.get_or_create_container(session_id)
@@ -45,7 +49,10 @@ def test_get_or_create_container_stopped(kernel_manager):
     session_id = "test_session"
     mock_container = MagicMock()
     mock_container.status = "exited"
-    kernel_manager.active_kernels[session_id] = mock_container
+    kernel_manager.active_kernels[session_id] = {
+        "container": mock_container,
+        "last_accessed": time.time()
+    }
 
     # Execute - Force refresh to hit the logic that reloads and restarts
     container = kernel_manager.get_or_create_container(session_id, force_refresh=True)
@@ -64,18 +71,21 @@ def test_get_or_create_container_missing_during_reload(kernel_manager):
     mock_response.status_code = 404
     mock_response.reason = "Not Found"
     mock_container.reload.side_effect = main.docker.errors.NotFound("Gone", response=mock_response)
-    kernel_manager.active_kernels[session_id] = mock_container
+    kernel_manager.active_kernels[session_id] = {
+        "container": mock_container,
+        "last_accessed": time.time()
+    }
 
-    # Mock start_new_container on the instance
+    # Mock start_new_container_unlocked on the instance (since it's called internally)
     new_container = MagicMock()
-    kernel_manager.start_new_container = MagicMock(return_value=new_container)
+    kernel_manager.start_new_container_unlocked = MagicMock(return_value=new_container)
 
     # Execute
     container = kernel_manager.get_or_create_container(session_id, force_refresh=True)
 
     # Assert: container should be the new one created after the old one was not found
     assert container == new_container
-    kernel_manager.start_new_container.assert_called_once_with(session_id)
+    kernel_manager.start_new_container_unlocked.assert_called_once_with(session_id)
 
 def test_start_new_container_success(kernel_manager):
     session_id = "new_session"
@@ -86,7 +96,7 @@ def test_start_new_container_success(kernel_manager):
     container = kernel_manager.start_new_container(session_id)
 
     assert container == mock_container
-    assert kernel_manager.active_kernels[session_id] == mock_container
+    assert kernel_manager.active_kernels[session_id]["container"] == mock_container
     main.DOCKER_CLIENT.containers.run.assert_called_once()
 
 def test_start_new_container_failure(kernel_manager):

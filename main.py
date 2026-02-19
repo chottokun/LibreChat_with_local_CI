@@ -4,6 +4,9 @@ import logging
 import os
 import uuid
 import docker
+import threading
+import time
+import asyncio
 from fastapi import FastAPI, HTTPException, Security, UploadFile, File, Form
 from fastapi.security import APIKeyHeader
 from fastapi.responses import Response, StreamingResponse
@@ -15,8 +18,12 @@ import shutil
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# 1. Authentication Scheme
+# Configuration
 API_KEY = os.environ.get("LIBRECHAT_CODE_API_KEY", "your_secret_key")
+RCE_SESSION_TTL = int(os.environ.get("RCE_SESSION_TTL", "3600"))
+RCE_MAX_SESSIONS = int(os.environ.get("RCE_MAX_SESSIONS", "100"))
+
+# 1. Authentication Scheme
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
 
 async def get_api_key(api_key: str = Security(api_key_header)):
@@ -35,37 +42,51 @@ class KernelManager:
     Uses 'docker exec' model for simplicity while maintaining filesystem state per session.
     """
     def __init__(self):
-        self.active_kernels = {} # Maps session_id to container object
+        self.active_kernels = {} # Maps session_id to dict with container and last_accessed
+        self.lock = threading.Lock()
 
     def get_or_create_container(self, session_id: str, force_refresh: bool = False):
-        if not force_refresh and session_id in self.active_kernels:
-            return self.active_kernels[session_id]
+        with self.lock:
+            if not force_refresh and session_id in self.active_kernels:
+                self.active_kernels[session_id]["last_accessed"] = time.time()
+                return self.active_kernels[session_id]["container"]
 
-        if session_id in self.active_kernels:
-            try:
-                # Re-fetch or refresh container status
-                container = self.active_kernels[session_id]
-                # If we have an object, we can try to reload it to get fresh status
+            if session_id in self.active_kernels:
                 try:
-                    container.reload()
-                except docker.errors.NotFound:
-                    # If reload fails, it's gone
+                    # Re-fetch or refresh container status
+                    container = self.active_kernels[session_id]["container"]
+                    # If we have an object, we can try to reload it to get fresh status
+                    try:
+                        container.reload()
+                    except docker.errors.NotFound:
+                        # If reload fails, it's gone
+                        del self.active_kernels[session_id]
+                        return self.start_new_container_unlocked(session_id)
+
+                    if container.status == "running":
+                        self.active_kernels[session_id]["last_accessed"] = time.time()
+                        return container
+                    else:
+                        # Restart if stopped
+                        container.start()
+                        self.active_kernels[session_id]["last_accessed"] = time.time()
+                        return container
+                except Exception:
+                    # Any other error, try to start fresh
                     del self.active_kernels[session_id]
-                    return self.start_new_container(session_id)
 
-                if container.status == "running":
-                    return container
-                else:
-                    # Restart if stopped
-                    container.start()
-                    return container
-            except Exception:
-                # Any other error, try to start fresh
-                del self.active_kernels[session_id]
-
-        return self.start_new_container(session_id)
+            return self.start_new_container_unlocked(session_id)
 
     def start_new_container(self, session_id: str):
+        with self.lock:
+            return self.start_new_container_unlocked(session_id)
+
+    def start_new_container_unlocked(self, session_id: str):
+        # Enforce max sessions
+        if len(self.active_kernels) >= RCE_MAX_SESSIONS:
+            logger.warning("Max sessions reached: %d", RCE_MAX_SESSIONS)
+            raise HTTPException(status_code=503, detail="Server is at capacity. Please try again later.")
+
         # Configuration from environment variables
         mem_limit = os.environ.get("RCE_MEM_LIMIT", "512m")
         cpu_limit_nano = int(os.environ.get("RCE_CPU_LIMIT", "500000000")) # 0.5 CPU default
@@ -89,15 +110,78 @@ class KernelManager:
                 network_disabled=not network_enabled,
                 device_requests=device_requests,
                 name=f"rce_{session_id}_{uuid.uuid4().hex[:6]}",
-                working_dir="/usr/src/app"
+                working_dir="/usr/src/app",
+                labels={
+                    "managed_by": "librechat-rce",
+                    "session_id": session_id
+                }
             )
             # Ensure workspace exists
             container.exec_run(cmd=["mkdir", "-p", "/usr/src/app"])
-            self.active_kernels[session_id] = container
+            self.active_kernels[session_id] = {
+                "container": container,
+                "last_accessed": time.time()
+            }
             return container
         except Exception as e:
             logger.exception("Failed to start sandbox for session %s", session_id)
             raise HTTPException(status_code=500, detail="Failed to start sandbox. Please contact an administrator.")
+
+    def recover_containers(self):
+        """Scans Docker for existing containers managed by this API and re-adopts them."""
+        logger.info("Scanning for existing containers to recover...")
+        try:
+            containers = DOCKER_CLIENT.containers.list(
+                all=True,
+                filters={"label": "managed_by=librechat-rce"}
+            )
+            with self.lock:
+                for container in containers:
+                    session_id = container.labels.get("session_id")
+                    if session_id and session_id not in self.active_kernels:
+                        try:
+                            # We don't auto-start here to avoid load spikes.
+                            # They will be started on first request.
+                            self.active_kernels[session_id] = {
+                                "container": container,
+                                "last_accessed": time.time()
+                            }
+                            logger.info("Recovered session %s from container %s", session_id, container.id)
+                        except Exception as e:
+                            logger.error("Failed to recover container %s: %s", container.id, e)
+        except Exception as e:
+            logger.error("Error during container recovery: %s", e)
+
+    def cleanup_sessions(self):
+        """Stops and removes containers that have exceeded the TTL."""
+        now = time.time()
+        to_delete = []
+        with self.lock:
+            for session_id, data in self.active_kernels.items():
+                if now - data["last_accessed"] > RCE_SESSION_TTL:
+                    to_delete.append(session_id)
+
+        for session_id in to_delete:
+            logger.info("Cleaning up idle session: %s", session_id)
+            try:
+                with self.lock:
+                    data = self.active_kernels.pop(session_id, None)
+                if data:
+                    container = data["container"]
+                    container.stop(timeout=5)
+                    # Since remove=True was used, it should be gone now.
+            except Exception as e:
+                logger.error("Error cleaning up session %s: %s", session_id, e)
+
+    async def cleanup_loop(self):
+        """Background loop for periodic cleanup."""
+        while True:
+            try:
+                # Run cleanup in a separate thread to avoid blocking the event loop
+                await asyncio.to_thread(self.cleanup_sessions)
+            except Exception as e:
+                logger.error("Error in cleanup loop: %s", e)
+            await asyncio.sleep(60) # Run every minute
 
     def upload_file(self, session_id: str, filename: str, content: bytes):
         container = self.get_or_create_container(session_id)
@@ -218,6 +302,13 @@ class CodeResponse(BaseModel):
     files: Optional[List[str]] = []
 
 # 4. Endpoints
+@app.on_event("startup")
+async def startup_event():
+    # Recover existing containers
+    kernel_manager.recover_containers()
+    # Start cleanup background task
+    asyncio.create_task(kernel_manager.cleanup_loop())
+
 @app.post("/exec", response_model=CodeResponse)
 @app.post("/run/exec", response_model=CodeResponse)
 async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
