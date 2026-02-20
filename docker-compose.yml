@@ -19,12 +19,13 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - LIBRECHAT_CODE_API_KEY=your_secret_key
-      - DOCKER_HOST=tcp://docker-proxy:2375
-      - RCE_NETWORK_ENABLED=false
-      - RCE_MEM_LIMIT=512m
-      - RCE_CPU_LIMIT=500000000
-      - RCE_GPU_ENABLED=false
+      - LIBRECHAT_CODE_API_KEY=${LIBRECHAT_CODE_API_KEY:-your_secret_key}
+      - DOCKER_HOST=${DOCKER_HOST:-tcp://docker-proxy:2375}
+      - RCE_IMAGE_NAME=${RCE_IMAGE_NAME:-custom-rce-kernel:latest}
+      - RCE_NETWORK_ENABLED=${RCE_NETWORK_ENABLED:-false}
+      - RCE_MEM_LIMIT=${RCE_MEM_LIMIT:-512m}
+      - RCE_CPU_LIMIT=${RCE_CPU_LIMIT:-500000000}
+      - RCE_GPU_ENABLED=${RCE_GPU_ENABLED:-false}
     depends_on:
       - docker-proxy
     restart: unless-stopped

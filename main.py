@@ -7,12 +7,14 @@ import docker
 import threading
 import time
 import asyncio
-from fastapi import FastAPI, HTTPException, Security, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, Security, UploadFile, File, Form, Query
 from fastapi.security import APIKeyHeader
+import mimetypes
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional
 import shutil
+import ast
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -24,12 +26,74 @@ RCE_SESSION_TTL = int(os.environ.get("RCE_SESSION_TTL", "3600"))
 RCE_MAX_SESSIONS = int(os.environ.get("RCE_MAX_SESSIONS", "100"))
 
 # 1. Authentication Scheme
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
+# Use auto_error=False to allow fallback to query parameter
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
-async def get_api_key(api_key: str = Security(api_key_header)):
-    if api_key != API_KEY:
+async def get_api_key(
+    api_key_h: Optional[str] = Security(api_key_header),
+    api_key_q: Optional[str] = Query(None, alias="api_key")
+):
+    key = api_key_h or api_key_q
+    if key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API Key")
-    return api_key
+    return key
+
+def wrap_code(code: str) -> str:
+    """
+    Wraps the last expression in print(repr(...)) if it's an expression.
+    This mimics Jupyter/Notebook behavior where the last expression is automatically displayed.
+    """
+    try:
+        tree = ast.parse(code)
+        if not tree.body:
+            return code
+
+        last_node = tree.body[-1]
+        if isinstance(last_node, ast.Expr):
+            # Wrap the expression in:
+            # __last_res__ = <expression>
+            # if __last_res__ is not None: print(repr(__last_res__))
+            # This mimics Jupyter/Notebook behavior.
+
+            # Create: __last_res__ = <last_node.value>
+            assign_node = ast.Assign(
+                targets=[ast.Name(id='__last_res__', ctx=ast.Store())],
+                value=last_node.value
+            )
+
+            # Create: if __last_res__ is not None: print(repr(__last_res__))
+            if_node = ast.If(
+                test=ast.Compare(
+                    left=ast.Name(id='__last_res__', ctx=ast.Load()),
+                    ops=[ast.IsNot()],
+                    comparators=[ast.Constant(value=None)]
+                ),
+                body=[
+                    ast.Expr(
+                        value=ast.Call(
+                            func=ast.Name(id='print', ctx=ast.Load()),
+                            args=[
+                                ast.Call(
+                                    func=ast.Name(id='repr', ctx=ast.Load()),
+                                    args=[ast.Name(id='__last_res__', ctx=ast.Load())],
+                                    keywords=[]
+                                )
+                            ],
+                            keywords=[]
+                        )
+                    )
+                ],
+                orelse=[]
+            )
+
+            tree.body[-1] = assign_node
+            tree.body.append(if_node)
+            ast.fix_missing_locations(tree)
+            return ast.unparse(tree)
+    except Exception:
+        # If parsing fails (e.g. syntax error), return original code and let it fail during execution
+        return code
+    return code
 
 app = FastAPI()
 DOCKER_CLIENT = docker.from_env()
@@ -114,7 +178,8 @@ class KernelManager:
                 labels={
                     "managed_by": "librechat-rce",
                     "session_id": session_id
-                }
+                },
+                environment={"PYTHONUNBUFFERED": "1"}
             )
             # Ensure workspace exists
             container.exec_run(cmd=["mkdir", "-p", "/usr/src/app"])
@@ -185,28 +250,41 @@ class KernelManager:
 
     def upload_file(self, session_id: str, filename: str, content: bytes):
         container = self.get_or_create_container(session_id)
+        # Sanitize filename to prevent path traversal
+        safe_filename = os.path.basename(filename)
+        if not safe_filename:
+            raise HTTPException(status_code=400, detail="Invalid filename")
         
         tar_stream = io.BytesIO()
         with tarfile.open(fileobj=tar_stream, mode='w') as tar:
-            tar_info = tarfile.TarInfo(name=filename)
+            tar_info = tarfile.TarInfo(name=safe_filename)
             tar_info.size = len(content)
             tar.addfile(tar_info, io.BytesIO(content))
         
         container.put_archive("/usr/src/app", tar_stream.getvalue())
-        logger.info("Uploaded file %s to session %s", filename, session_id)
+        logger.info("Uploaded file %s to session %s", safe_filename, session_id)
 
     def download_file(self, session_id: str, filename: str):
         container = self.get_or_create_container(session_id)
+        # Sanitize filename to prevent path traversal
+        safe_filename = os.path.basename(filename)
+        if not safe_filename:
+            raise HTTPException(status_code=400, detail="Invalid filename")
+
         try:
             # get_archive returns a tuple: (stream, stat)
-            bits, stat = container.get_archive(f"/usr/src/app/{filename}")
+            bits, stat = container.get_archive(f"/usr/src/app/{safe_filename}")
             
             # Extract from tar bits
             tar_stream = io.BytesIO(b"".join(bits))
             with tarfile.open(fileobj=tar_stream, mode='r') as tar:
-                f = tar.extractfile(filename)
+                # Use the first member from the tar archive for robustness
+                members = tar.getmembers()
+                if not members:
+                    raise FileNotFoundError()
+                f = tar.extractfile(members[0])
                 if f:
-                    return f.read(), stat['mtime']
+                    return f.read(), stat.get('mtime', 0)
             raise FileNotFoundError()
         except Exception as e:
             logger.error("Failed to download file %s from session %s: %s", filename, session_id, e)
@@ -237,7 +315,10 @@ class KernelManager:
         container_path = f"/usr/src/app/{code_filename}"
         
         try:
-            # 1. Write code to file inside container
+            # 1. Apply code wrapping for expression-only support
+            wrapped_code = wrap_code(code)
+
+            # 2. Write code to file inside container
             def _run_with_retry(km, container, code_content, path, filename):
                 tar_stream = io.BytesIO()
                 with tarfile.open(fileobj=tar_stream, mode='w') as tar:
@@ -257,12 +338,12 @@ class KernelManager:
                 )
 
             try:
-                exec_result = _run_with_retry(self, container, code, container_path, code_filename)
+                exec_result = _run_with_retry(self, container, wrapped_code, container_path, code_filename)
             except (docker.errors.APIError, docker.errors.NotFound):
                 # Optimistic assumption failed: container might be stopped or gone
                 # Recovery: Force refresh and retry once
                 container = self.get_or_create_container(session_id, force_refresh=True)
-                exec_result = _run_with_retry(self, container, code, container_path, code_filename)
+                exec_result = _run_with_retry(self, container, wrapped_code, container_path, code_filename)
             
             stdout, stderr = exec_result.output
 
@@ -356,17 +437,39 @@ async def list_session_files(session_id: str, key: str = Security(get_api_key)):
     files = kernel_manager.list_files(session_id)
     return {"files": files}
 
+@app.get("/download")
+@app.get("/run/download")
+async def download_file_query(
+    session_id: str = Query(...),
+    filename: str = Query(...),
+    key: str = Security(get_api_key)
+):
+    """
+    Downloads a file from a session's sandbox using query parameters.
+    """
+    return await download_session_file(session_id, filename, key)
+
 @app.get("/download/{session_id}/{filename}")
+@app.get("/run/download/{session_id}/{filename}")
 async def download_session_file(session_id: str, filename: str, key: str = Security(get_api_key)):
     """
-    Downloads a file from a session's sandbox.
+    Downloads a file from a session's sandbox using path parameters.
     """
     content, mtime = kernel_manager.download_file(session_id, filename)
+
+    # Guess MIME type
+    mime_type, _ = mimetypes.guess_type(filename)
+    if not mime_type:
+        mime_type = "application/octet-stream"
+
+    # Use inline for images and PDFs to allow them to be displayed in the chat interface
+    disposition = "inline" if mime_type.startswith(("image/", "application/pdf")) else "attachment"
+
     return Response(
         content=content,
-        media_type="application/octet-stream",
+        media_type=mime_type,
         headers={
-            "Content-Disposition": f"attachment; filename={filename}"
+            "Content-Disposition": f"{disposition}; filename={filename}"
         }
     )
 
