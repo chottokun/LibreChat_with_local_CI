@@ -4,8 +4,9 @@ import logging
 import os
 import uuid
 import docker
-from fastapi import FastAPI, HTTPException, Security, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, Security, UploadFile, File, Form, Query
 from fastapi.security import APIKeyHeader
+import mimetypes
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional
@@ -17,12 +18,17 @@ logger = logging.getLogger(__name__)
 
 # 1. Authentication Scheme
 API_KEY = os.environ.get("LIBRECHAT_CODE_API_KEY", "your_secret_key")
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
+# Use auto_error=False to allow fallback to query parameter
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
-async def get_api_key(api_key: str = Security(api_key_header)):
-    if api_key != API_KEY:
+async def get_api_key(
+    api_key_h: Optional[str] = Security(api_key_header),
+    api_key_q: Optional[str] = Query(None, alias="api_key")
+):
+    key = api_key_h or api_key_q
+    if key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API Key")
-    return api_key
+    return key
 
 app = FastAPI()
 DOCKER_CLIENT = docker.from_env()
@@ -101,28 +107,41 @@ class KernelManager:
 
     def upload_file(self, session_id: str, filename: str, content: bytes):
         container = self.get_or_create_container(session_id)
+        # Sanitize filename to prevent path traversal
+        safe_filename = os.path.basename(filename)
+        if not safe_filename:
+            raise HTTPException(status_code=400, detail="Invalid filename")
         
         tar_stream = io.BytesIO()
         with tarfile.open(fileobj=tar_stream, mode='w') as tar:
-            tar_info = tarfile.TarInfo(name=filename)
+            tar_info = tarfile.TarInfo(name=safe_filename)
             tar_info.size = len(content)
             tar.addfile(tar_info, io.BytesIO(content))
         
         container.put_archive("/usr/src/app", tar_stream.getvalue())
-        logger.info("Uploaded file %s to session %s", filename, session_id)
+        logger.info("Uploaded file %s to session %s", safe_filename, session_id)
 
     def download_file(self, session_id: str, filename: str):
         container = self.get_or_create_container(session_id)
+        # Sanitize filename to prevent path traversal
+        safe_filename = os.path.basename(filename)
+        if not safe_filename:
+            raise HTTPException(status_code=400, detail="Invalid filename")
+
         try:
             # get_archive returns a tuple: (stream, stat)
-            bits, stat = container.get_archive(f"/usr/src/app/{filename}")
+            bits, stat = container.get_archive(f"/usr/src/app/{safe_filename}")
             
             # Extract from tar bits
             tar_stream = io.BytesIO(b"".join(bits))
             with tarfile.open(fileobj=tar_stream, mode='r') as tar:
-                f = tar.extractfile(filename)
+                # Use the first member from the tar archive for robustness
+                members = tar.getmembers()
+                if not members:
+                    raise FileNotFoundError()
+                f = tar.extractfile(members[0])
                 if f:
-                    return f.read(), stat['mtime']
+                    return f.read(), stat.get('mtime', 0)
             raise FileNotFoundError()
         except Exception as e:
             logger.error("Failed to download file %s from session %s: %s", filename, session_id, e)
@@ -265,17 +284,39 @@ async def list_session_files(session_id: str, key: str = Security(get_api_key)):
     files = kernel_manager.list_files(session_id)
     return {"files": files}
 
+@app.get("/download")
+@app.get("/run/download")
+async def download_file_query(
+    session_id: str = Query(...),
+    filename: str = Query(...),
+    key: str = Security(get_api_key)
+):
+    """
+    Downloads a file from a session's sandbox using query parameters.
+    """
+    return await download_session_file(session_id, filename, key)
+
 @app.get("/download/{session_id}/{filename}")
+@app.get("/run/download/{session_id}/{filename}")
 async def download_session_file(session_id: str, filename: str, key: str = Security(get_api_key)):
     """
-    Downloads a file from a session's sandbox.
+    Downloads a file from a session's sandbox using path parameters.
     """
     content, mtime = kernel_manager.download_file(session_id, filename)
+
+    # Guess MIME type
+    mime_type, _ = mimetypes.guess_type(filename)
+    if not mime_type:
+        mime_type = "application/octet-stream"
+
+    # Use inline for images and PDFs to allow them to be displayed in the chat interface
+    disposition = "inline" if mime_type.startswith(("image/", "application/pdf")) else "attachment"
+
     return Response(
         content=content,
-        media_type="application/octet-stream",
+        media_type=mime_type,
         headers={
-            "Content-Disposition": f"attachment; filename={filename}"
+            "Content-Disposition": f"{disposition}; filename={filename}"
         }
     )
 
