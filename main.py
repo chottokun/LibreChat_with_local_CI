@@ -7,12 +7,14 @@ import docker
 import threading
 import time
 import asyncio
+import string
+import random
 from fastapi import FastAPI, HTTPException, Security, UploadFile, File, Form, Query
 from fastapi.security import APIKeyHeader
 import mimetypes
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict
 import shutil
 import ast
 
@@ -98,6 +100,16 @@ def wrap_code(code: str) -> str:
 app = FastAPI()
 DOCKER_CLIENT = docker.from_env()
 RCE_IMAGE_NAME = os.environ.get("RCE_IMAGE_NAME", "custom-rce-kernel:latest")
+
+# Nanoid-compatible ID generation (21 chars, [A-Za-z0-9_-])
+_NANOID_ALPHABET = string.ascii_letters + string.digits + '_-'
+def generate_nanoid(size: int = 21) -> str:
+    return ''.join(random.choices(_NANOID_ALPHABET, k=size))
+
+# Mapping: nanoid_session_id -> uuid_session_id and nanoid_file_id -> filename
+_nanoid_to_session: Dict[str, str] = {}
+_session_to_nanoid: Dict[str, str] = {}
+_file_id_map: Dict[str, Dict[str, str]] = {}  # {nanoid_session_id: {nanoid_file_id: filename}}
 
 # 2. Kernel Manager for Session Management
 class KernelManager:
@@ -405,18 +417,37 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
     """
     session_id = req.session_id or str(uuid.uuid4())
     
+    # Generate or reuse a nanoid-compatible session ID for LibreChat
+    if session_id not in _session_to_nanoid:
+        nanoid_session = generate_nanoid()
+        _session_to_nanoid[session_id] = nanoid_session
+        _nanoid_to_session[nanoid_session] = session_id
+    nanoid_session = _session_to_nanoid[session_id]
+    
     # Run in sandbox
     result = kernel_manager.execute_code(session_id, req.code)
     
     # List generated files and format them for LibreChat native ingestion
     current_files = kernel_manager.list_files(session_id)
     structured_files = []
+    
+    # Initialize file mapping for this session
+    if nanoid_session not in _file_id_map:
+        _file_id_map[nanoid_session] = {}
+    
     for f in current_files:
         mime_type, _ = mimetypes.guess_type(f)
+        # Generate or reuse nanoid for this file
+        existing_ids = {v: k for k, v in _file_id_map[nanoid_session].items()}
+        if f in existing_ids:
+            nanoid_file = existing_ids[f]
+        else:
+            nanoid_file = generate_nanoid()
+            _file_id_map[nanoid_session][nanoid_file] = f
         structured_files.append({
-            "id": f,
+            "id": nanoid_file,
             "name": f,
-            "url": f"/api/files/code/download/{session_id}/{f}",
+            "url": f"/api/files/code/download/{nanoid_session}/{nanoid_file}",
             "type": mime_type or "application/octet-stream"
         })
     
@@ -425,7 +456,7 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
         "stderr": result["stderr"],
         "exit_code": result["exit_code"],
         "output": result["stdout"], # Simplified
-        "session_id": session_id,
+        "session_id": nanoid_session,
         "files": structured_files
     }
 
@@ -471,11 +502,20 @@ async def download_file_query(
 async def download_session_file(session_id: str, filename: str, key: Optional[str] = Security(get_api_key)):
     """
     Downloads a file from a session's sandbox using path parameters.
+    Supports nanoid-format IDs (used by LibreChat) and direct session_id/filename.
     """
-    content, mtime = kernel_manager.download_file(session_id, filename)
+    # Resolve nanoid session ID to real UUID session ID
+    real_session_id = _nanoid_to_session.get(session_id, session_id)
+    
+    # Resolve nanoid file ID to real filename
+    real_filename = filename
+    if session_id in _file_id_map and filename in _file_id_map[session_id]:
+        real_filename = _file_id_map[session_id][filename]
+    
+    content, mtime = kernel_manager.download_file(real_session_id, real_filename)
 
     # Guess MIME type
-    mime_type, _ = mimetypes.guess_type(filename)
+    mime_type, _ = mimetypes.guess_type(real_filename)
     if not mime_type:
         mime_type = "application/octet-stream"
 
@@ -486,7 +526,7 @@ async def download_session_file(session_id: str, filename: str, key: Optional[st
         content=content,
         media_type=mime_type,
         headers={
-            "Content-Disposition": f"{disposition}; filename={filename}"
+            "Content-Disposition": f"{disposition}; filename={real_filename}"
         }
     )
 
