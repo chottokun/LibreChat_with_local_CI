@@ -11,8 +11,8 @@ import string
 import random
 from fastapi import FastAPI, HTTPException, Security, UploadFile, File, Form, Query
 from fastapi.security import APIKeyHeader
+from fastapi.responses import Response, FileResponse
 import mimetypes
-from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict
 import shutil
@@ -503,6 +503,7 @@ async def download_session_file(session_id: str, filename: str, key: Optional[st
     """
     Downloads a file from a session's sandbox using path parameters.
     Supports nanoid-format IDs (used by LibreChat) and direct session_id/filename.
+    Uses FileResponse to ensure perfect streaming header compatibility with LibreChat's Axios proxy.
     """
     # Resolve nanoid session ID to real UUID session ID
     real_session_id = _nanoid_to_session.get(session_id, session_id)
@@ -521,13 +522,18 @@ async def download_session_file(session_id: str, filename: str, key: Optional[st
 
     # Use inline for images and PDFs to allow them to be displayed in the chat interface
     disposition = "inline" if mime_type.startswith(("image/", "application/pdf")) else "attachment"
+    
+    # Save the file to /tmp so FastAPI can stream it natively via FileResponse
+    import os
+    tmp_filepath = f"/tmp/{real_session_id}_{real_filename}"
+    with open(tmp_filepath, "wb") as f:
+        f.write(content)
 
-    return Response(
-        content=content,
+    return FileResponse(
+        path=tmp_filepath,
+        filename=real_filename,
         media_type=mime_type,
-        headers={
-            "Content-Disposition": f"{disposition}; filename={real_filename}"
-        }
+        content_disposition_type=disposition
     )
 
 @app.get("/health")
