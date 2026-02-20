@@ -376,6 +376,7 @@ class CodeRequest(BaseModel):
     files: Optional[List[str]] = []
 
 class FileInfo(BaseModel):
+    id: str
     name: str
     url: str
     type: str
@@ -385,6 +386,7 @@ class CodeResponse(BaseModel):
     stderr: str
     exit_code: int
     output: Optional[str] = ""
+    session_id: Optional[str] = None
     files: Optional[List[FileInfo]] = []
 
 # 4. Endpoints
@@ -412,6 +414,7 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
     for f in current_files:
         mime_type, _ = mimetypes.guess_type(f)
         structured_files.append({
+            "id": f,
             "name": f,
             "url": f"/api/files/code/download/{session_id}/{f}",
             "type": mime_type or "application/octet-stream"
@@ -422,6 +425,7 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
         "stderr": result["stderr"],
         "exit_code": result["exit_code"],
         "output": result["stdout"], # Simplified
+        "session_id": session_id,
         "files": structured_files
     }
 
