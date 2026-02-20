@@ -24,9 +24,9 @@ services:
     container_name: librechat-meilisearch
     restart: always
     environment:
-      - MEILI_HOST=http://0.0.0.0:7700
-      - MEILI_NO_ANALYTICS=true
-      - MEILI_MASTER_KEY=your_master_key
+      - MEILI_HOST=${MEILI_HOST:-http://0.0.0.0:7700}
+      - MEILI_NO_ANALYTICS=${MEILI_NO_ANALYTICS:-true}
+      - MEILI_MASTER_KEY=${MEILI_MASTER_KEY:-your_master_key}
     volumes:
       - meili-data:/meili_data
     networks:
@@ -43,24 +43,24 @@ services:
       - meilisearch
       - code-interpreter-api
     environment:
-      - MONGO_URI=mongodb://mongodb:27017/LibreChat
-      - MEILI_HOST=http://meilisearch:7700
-      - MEILI_MASTER_KEY=your_master_key
-      - CONFIG_PATH=/app/librechat.yaml
-      - LIBRECHAT_CODE_BASEURL=http://librechat_code_interpreter_api:8000
-      - LIBRECHAT_CODE_API_KEY=your_secret_key
-      - CONFIG_BYPASS_VALIDATION=true
-      - ALLOW_REGISTRATION=true
-      - JWT_SECRET=32_char_secret_key_used_for_testing_123
-      - JWT_REFRESH_SECRET=32_char_refresh_key_used_for_testing_456
-      - OPENAI_API_KEY=sk-dummy-key-for-ui-testing
-      - OLLAMA_BASE_URL=http://ollama:11434
-      - OLLAMA_MODELS=qwen2.5-coder:3b
+      - MONGO_URI=${MONGO_URI:-mongodb://mongodb:27017/LibreChat}
+      - MEILI_HOST=${MEILI_HOST:-http://meilisearch:7700}
+      - MEILI_MASTER_KEY=${MEILI_MASTER_KEY:-your_master_key}
+      - CONFIG_PATH=${CONFIG_PATH:-/app/librechat.yaml}
+      - LIBRECHAT_CODE_BASEURL=${LIBRECHAT_CODE_BASEURL:-http://librechat_code_interpreter_api:8000}
+      - LIBRECHAT_CODE_API_KEY=${LIBRECHAT_CODE_API_KEY:-your_secret_key}
+      - CONFIG_BYPASS_VALIDATION=${CONFIG_BYPASS_VALIDATION:-true}
+      - ALLOW_REGISTRATION=${ALLOW_REGISTRATION:-true}
+      - JWT_SECRET=${JWT_SECRET:-32_char_secret_key_used_for_testing_123}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET:-32_char_refresh_key_used_for_testing_456}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-sk-dummy-key-for-ui-testing}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
+      - OLLAMA_MODELS=${OLLAMA_MODELS:-qwen2.5-coder:3b}
       - EXTERNAL_API_URL=${EXTERNAL_API_URL}
       - EXTERNAL_API_KEY=${EXTERNAL_API_KEY}
       - EXTERNAL_LLM_MODEL=${EXTERNAL_LLM_MODEL}
-      - CREDS_KEY=f34be427ebaeded2940f7d30100edb51
-      - CREDS_IV=12345678901234567890123456789012
+      - CREDS_KEY=${CREDS_KEY:-f34be427ebaeded2940f7d30100edb51}
+      - CREDS_IV=${CREDS_IV:-12345678901234567890123456789012}
     volumes:
       - ./librechat.yaml:/app/librechat.yaml
     networks:
