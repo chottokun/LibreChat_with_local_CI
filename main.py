@@ -10,6 +10,7 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional
 import shutil
+import ast
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -23,6 +24,63 @@ async def get_api_key(api_key: str = Security(api_key_header)):
     if api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API Key")
     return api_key
+
+def wrap_code(code: str) -> str:
+    """
+    Wraps the last expression in print(repr(...)) if it's an expression.
+    This mimics Jupyter/Notebook behavior where the last expression is automatically displayed.
+    """
+    try:
+        tree = ast.parse(code)
+        if not tree.body:
+            return code
+
+        last_node = tree.body[-1]
+        if isinstance(last_node, ast.Expr):
+            # Wrap the expression in:
+            # __last_res__ = <expression>
+            # if __last_res__ is not None: print(repr(__last_res__))
+            # This mimics Jupyter/Notebook behavior.
+
+            # Create: __last_res__ = <last_node.value>
+            assign_node = ast.Assign(
+                targets=[ast.Name(id='__last_res__', ctx=ast.Store())],
+                value=last_node.value
+            )
+
+            # Create: if __last_res__ is not None: print(repr(__last_res__))
+            if_node = ast.If(
+                test=ast.Compare(
+                    left=ast.Name(id='__last_res__', ctx=ast.Load()),
+                    ops=[ast.IsNot()],
+                    comparators=[ast.Constant(value=None)]
+                ),
+                body=[
+                    ast.Expr(
+                        value=ast.Call(
+                            func=ast.Name(id='print', ctx=ast.Load()),
+                            args=[
+                                ast.Call(
+                                    func=ast.Name(id='repr', ctx=ast.Load()),
+                                    args=[ast.Name(id='__last_res__', ctx=ast.Load())],
+                                    keywords=[]
+                                )
+                            ],
+                            keywords=[]
+                        )
+                    )
+                ],
+                orelse=[]
+            )
+
+            tree.body[-1] = assign_node
+            tree.body.append(if_node)
+            ast.fix_missing_locations(tree)
+            return ast.unparse(tree)
+    except Exception:
+        # If parsing fails (e.g. syntax error), return original code and let it fail during execution
+        return code
+    return code
 
 app = FastAPI()
 DOCKER_CLIENT = docker.from_env()
@@ -89,7 +147,8 @@ class KernelManager:
                 network_disabled=not network_enabled,
                 device_requests=device_requests,
                 name=f"rce_{session_id}_{uuid.uuid4().hex[:6]}",
-                working_dir="/usr/src/app"
+                working_dir="/usr/src/app",
+                environment={"PYTHONUNBUFFERED": "1"}
             )
             # Ensure workspace exists
             container.exec_run(cmd=["mkdir", "-p", "/usr/src/app"])
@@ -153,7 +212,10 @@ class KernelManager:
         container_path = f"/usr/src/app/{code_filename}"
         
         try:
-            # 1. Write code to file inside container
+            # 1. Apply code wrapping for expression-only support
+            wrapped_code = wrap_code(code)
+
+            # 2. Write code to file inside container
             def _run_with_retry(km, container, code_content, path, filename):
                 tar_stream = io.BytesIO()
                 with tarfile.open(fileobj=tar_stream, mode='w') as tar:
@@ -173,12 +235,12 @@ class KernelManager:
                 )
 
             try:
-                exec_result = _run_with_retry(self, container, code, container_path, code_filename)
+                exec_result = _run_with_retry(self, container, wrapped_code, container_path, code_filename)
             except (docker.errors.APIError, docker.errors.NotFound):
                 # Optimistic assumption failed: container might be stopped or gone
                 # Recovery: Force refresh and retry once
                 container = self.get_or_create_container(session_id, force_refresh=True)
-                exec_result = _run_with_retry(self, container, code, container_path, code_filename)
+                exec_result = _run_with_retry(self, container, wrapped_code, container_path, code_filename)
             
             stdout, stderr = exec_result.output
 
