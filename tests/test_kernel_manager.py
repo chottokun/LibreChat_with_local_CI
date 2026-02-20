@@ -98,6 +98,8 @@ def test_start_new_container_success(kernel_manager):
     assert container == mock_container
     assert kernel_manager.active_kernels[session_id]["container"] == mock_container
     main.DOCKER_CLIENT.containers.run.assert_called_once()
+    args, kwargs = main.DOCKER_CLIENT.containers.run.call_args
+    assert kwargs["environment"] == {"PYTHONUNBUFFERED": "1"}
 
 def test_start_new_container_failure(kernel_manager):
     session_id = "fail_session"
