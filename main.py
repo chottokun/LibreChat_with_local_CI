@@ -375,12 +375,17 @@ class CodeRequest(BaseModel):
     user_id: Optional[str] = None
     files: Optional[List[str]] = []
 
+class FileInfo(BaseModel):
+    name: str
+    url: str
+    type: str
+
 class CodeResponse(BaseModel):
     stdout: str
     stderr: str
     exit_code: int
     output: Optional[str] = ""
-    files: Optional[List[str]] = []
+    files: Optional[List[FileInfo]] = []
 
 # 4. Endpoints
 @app.on_event("startup")
@@ -401,16 +406,23 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
     # Run in sandbox
     result = kernel_manager.execute_code(session_id, req.code)
     
-    # List generated files (simplified: list all in workspace)
-    # In a more advanced version, we would track changes.
+    # List generated files and format them for LibreChat native ingestion
     current_files = kernel_manager.list_files(session_id)
+    structured_files = []
+    for f in current_files:
+        mime_type, _ = mimetypes.guess_type(f)
+        structured_files.append({
+            "name": f,
+            "url": f"/run/download/{session_id}/{f}",
+            "type": mime_type or "application/octet-stream"
+        })
     
     return {
         "stdout": result["stdout"],
         "stderr": result["stderr"],
         "exit_code": result["exit_code"],
         "output": result["stdout"], # Simplified
-        "files": current_files
+        "files": structured_files
     }
 
 @app.post("/upload")
