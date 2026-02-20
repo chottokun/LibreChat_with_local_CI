@@ -36,8 +36,8 @@ services:
     image: ghcr.io/danny-avila/librechat:latest
     container_name: librechat
     restart: always
-    # ports:
-    #   - "3080:3080" # Moved to nginx service
+    ports:
+      - "3080:3080"
     depends_on:
       - mongodb
       - meilisearch
@@ -77,20 +77,6 @@ services:
       - librechat-network
 
   code-interpreter-api:
-    networks:
-      - librechat-network
-
-  nginx:
-    image: nginx:stable-alpine
-    container_name: librechat-nginx
-    restart: always
-    ports:
-      - "3080:3080"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-    depends_on:
-      - librechat
-      - code-interpreter-api
     networks:
       - librechat-network
 
