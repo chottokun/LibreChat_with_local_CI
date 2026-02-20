@@ -413,7 +413,7 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
         mime_type, _ = mimetypes.guess_type(f)
         structured_files.append({
             "name": f,
-            "url": f"/run/download/{session_id}/{f}",
+            "url": f"/api/files/code/download/{session_id}/{f}",
             "type": mime_type or "application/octet-stream"
         })
     
@@ -461,9 +461,10 @@ async def download_file_query(
     """
     return await download_session_file(session_id, filename, key)
 
+@app.get("/api/files/code/download/{session_id}/{filename}")
 @app.get("/download/{session_id}/{filename}")
 @app.get("/run/download/{session_id}/{filename}")
-async def download_session_file(session_id: str, filename: str, key: str = Security(get_api_key)):
+async def download_session_file(session_id: str, filename: str, key: Optional[str] = Security(get_api_key)):
     """
     Downloads a file from a session's sandbox using path parameters.
     """
