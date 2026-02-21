@@ -1,7 +1,5 @@
-import sys
 from unittest.mock import MagicMock, patch
 import pytest
-import docker
 import time
 from fastapi import HTTPException
 
