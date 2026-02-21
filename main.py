@@ -8,7 +8,7 @@ import threading
 import time
 import asyncio
 import string
-import random
+import secrets
 from fastapi import FastAPI, HTTPException, Security, UploadFile, File, Form, Query
 from fastapi.security import APIKeyHeader
 from fastapi.responses import Response, FileResponse
@@ -104,7 +104,7 @@ RCE_IMAGE_NAME = os.environ.get("RCE_IMAGE_NAME", "custom-rce-kernel:latest")
 # Nanoid-compatible ID generation (21 chars, [A-Za-z0-9_-])
 _NANOID_ALPHABET = string.ascii_letters + string.digits + '_-'
 def generate_nanoid(size: int = 21) -> str:
-    return ''.join(random.choices(_NANOID_ALPHABET, k=size))
+    return ''.join(secrets.choice(_NANOID_ALPHABET) for _ in range(size))
 
 # Mapping: nanoid_session_id -> uuid_session_id and nanoid_file_id -> filename
 _nanoid_to_session: Dict[str, str] = {}
