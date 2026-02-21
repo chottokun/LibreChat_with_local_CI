@@ -120,48 +120,76 @@ class KernelManager:
     def __init__(self):
         self.active_kernels = {} # Maps session_id to dict with container and last_accessed
         self.lock = threading.Lock()
+        self.condition = threading.Condition(self.lock)
+        self.pending_creations = set()
 
     def get_or_create_container(self, session_id: str, force_refresh: bool = False):
-        with self.lock:
-            if not force_refresh and session_id in self.active_kernels:
-                self.active_kernels[session_id]["last_accessed"] = time.time()
-                return self.active_kernels[session_id]["container"]
+        while True:
+            with self.lock:
+                if not force_refresh and session_id in self.active_kernels:
+                    self.active_kernels[session_id]["last_accessed"] = time.time()
+                    return self.active_kernels[session_id]["container"]
 
-            if session_id in self.active_kernels:
-                try:
-                    # Re-fetch or refresh container status
+                if session_id in self.pending_creations:
+                    self.condition.wait()
+                    continue
+
+                if session_id not in self.active_kernels:
+                    if len(self.active_kernels) >= RCE_MAX_SESSIONS:
+                        logger.warning("Max sessions reached: %d", RCE_MAX_SESSIONS)
+                        raise HTTPException(status_code=503, detail="Server is at capacity. Please try again later.")
+
+                self.pending_creations.add(session_id)
+                break
+
+        try:
+            container = None
+            with self.lock:
+                if session_id in self.active_kernels:
                     container = self.active_kernels[session_id]["container"]
-                    # If we have an object, we can try to reload it to get fresh status
-                    try:
-                        container.reload()
-                    except docker.errors.NotFound:
-                        # If reload fails, it's gone
-                        del self.active_kernels[session_id]
-                        return self.start_new_container_unlocked(session_id)
 
+            if container:
+                try:
+                    container.reload()
                     if container.status == "running":
-                        self.active_kernels[session_id]["last_accessed"] = time.time()
+                        with self.lock:
+                            self.active_kernels[session_id]["last_accessed"] = time.time()
                         return container
                     else:
-                        # Restart if stopped
                         container.start()
-                        self.active_kernels[session_id]["last_accessed"] = time.time()
+                        with self.lock:
+                            self.active_kernels[session_id]["last_accessed"] = time.time()
                         return container
-                except Exception:
-                    # Any other error, try to start fresh
-                    del self.active_kernels[session_id]
+                except docker.errors.NotFound:
+                    with self.lock:
+                        if session_id in self.active_kernels:
+                            del self.active_kernels[session_id]
+                except Exception as e:
+                    logger.error("Error refreshing container for session %s: %s", session_id, e)
+                    with self.lock:
+                        if session_id in self.active_kernels:
+                            del self.active_kernels[session_id]
 
             return self.start_new_container_unlocked(session_id)
+        finally:
+            with self.lock:
+                self.pending_creations.remove(session_id)
+                self.condition.notify_all()
 
     def start_new_container(self, session_id: str):
-        with self.lock:
-            return self.start_new_container_unlocked(session_id)
+        return self.get_or_create_container(session_id, force_refresh=True)
 
     def start_new_container_unlocked(self, session_id: str):
+        """
+        Starts a new container for a session.
+        Note: The 'unlocked' in the name is now a misnomer as it handles its own locking
+        for state updates, but is kept for backward compatibility with tests.
+        """
         # Enforce max sessions
-        if len(self.active_kernels) >= RCE_MAX_SESSIONS:
-            logger.warning("Max sessions reached: %d", RCE_MAX_SESSIONS)
-            raise HTTPException(status_code=503, detail="Server is at capacity. Please try again later.")
+        with self.lock:
+            if len(self.active_kernels) >= RCE_MAX_SESSIONS:
+                logger.warning("Max sessions reached: %d", RCE_MAX_SESSIONS)
+                raise HTTPException(status_code=503, detail="Server is at capacity. Please try again later.")
 
         # Configuration from environment variables
         mem_limit = os.environ.get("RCE_MEM_LIMIT", "512m")
@@ -195,10 +223,11 @@ class KernelManager:
             )
             # Ensure workspace exists
             container.exec_run(cmd=["mkdir", "-p", "/usr/src/app"])
-            self.active_kernels[session_id] = {
-                "container": container,
-                "last_accessed": time.time()
-            }
+            with self.lock:
+                self.active_kernels[session_id] = {
+                    "container": container,
+                    "last_accessed": time.time()
+                }
             return container
         except Exception as e:
             logger.exception("Failed to start sandbox for session %s", session_id)
