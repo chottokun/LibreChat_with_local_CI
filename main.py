@@ -11,7 +11,7 @@ import string
 import random
 from fastapi import FastAPI, HTTPException, Security, UploadFile, File, Form, Query
 from fastapi.security import APIKeyHeader
-from fastapi.responses import Response, FileResponse
+from fastapi.responses import FileResponse
 import mimetypes
 from pydantic import BaseModel
 from typing import List, Optional, Dict
