@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 API_KEY = os.environ.get("LIBRECHAT_CODE_API_KEY", "your_secret_key")
 RCE_SESSION_TTL = int(os.environ.get("RCE_SESSION_TTL", "3600"))
 RCE_MAX_SESSIONS = int(os.environ.get("RCE_MAX_SESSIONS", "100"))
+RCE_MANAGED_BY_VALUE = "librechat-rce"
 
 # 1. Authentication Scheme
 # Use auto_error=False to allow fallback to query parameter
@@ -176,7 +177,7 @@ class KernelManager:
                 name=f"rce_{session_id}_{uuid.uuid4().hex[:6]}",
                 working_dir="/usr/src/app",
                 labels={
-                    "managed_by": "librechat-rce",
+                    "managed_by": RCE_MANAGED_BY_VALUE,
                     "session_id": session_id
                 },
                 environment={"PYTHONUNBUFFERED": "1"}
@@ -198,7 +199,7 @@ class KernelManager:
         try:
             containers = DOCKER_CLIENT.containers.list(
                 all=True,
-                filters={"label": "managed_by=librechat-rce"}
+                filters={"label": f"managed_by={RCE_MANAGED_BY_VALUE}"}
             )
             with self.lock:
                 for container in containers:
