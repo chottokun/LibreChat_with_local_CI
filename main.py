@@ -120,11 +120,6 @@ _NANOID_ALPHABET = string.ascii_letters + string.digits + '_-'
 def generate_nanoid(size: int = 21) -> str:
     return ''.join(secrets.choice(_NANOID_ALPHABET) for _ in range(size))
 
-# Mapping: nanoid_session_id -> uuid_session_id and nanoid_file_id -> filename
-_nanoid_to_session: Dict[str, str] = {}
-_session_to_nanoid: Dict[str, str] = {}
-_file_id_map: Dict[str, Dict[str, str]] = {}  # {nanoid_session_id: {nanoid_file_id: filename}}
-
 # 2. Kernel Manager for Session Management
 class KernelManager:
     """
@@ -134,6 +129,10 @@ class KernelManager:
     def __init__(self):
         self.active_kernels = {} # Maps session_id to dict with container and last_accessed
         self.lock = threading.Lock()
+        # Mapping: nanoid_session_id -> uuid_session_id and nanoid_file_id -> filename
+        self.nanoid_to_session: Dict[str, str] = {}
+        self.session_to_nanoid: Dict[str, str] = {}
+        self.file_id_map: Dict[str, Dict[str, str]] = {}  # {nanoid_session_id: {nanoid_file_id: filename}}
 
     def get_or_create_container(self, session_id: str, force_refresh: bool = False):
         with self.lock:
@@ -256,6 +255,12 @@ class KernelManager:
             logger.info("Cleaning up idle session: %s", session_id)
             try:
                 with self.lock:
+                    # Clean up ID mappings
+                    nanoid_session = self.session_to_nanoid.pop(session_id, None)
+                    if nanoid_session:
+                        self.nanoid_to_session.pop(nanoid_session, None)
+                        self.file_id_map.pop(nanoid_session, None)
+
                     data = self.active_kernels.pop(session_id, None)
                 if data:
                     container = data["container"]
@@ -432,11 +437,12 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
     session_id = req.session_id or str(uuid.uuid4())
     
     # Generate or reuse a nanoid-compatible session ID for LibreChat
-    if session_id not in _session_to_nanoid:
-        nanoid_session = generate_nanoid()
-        _session_to_nanoid[session_id] = nanoid_session
-        _nanoid_to_session[nanoid_session] = session_id
-    nanoid_session = _session_to_nanoid[session_id]
+    with kernel_manager.lock:
+        if session_id not in kernel_manager.session_to_nanoid:
+            nanoid_session = generate_nanoid()
+            kernel_manager.session_to_nanoid[session_id] = nanoid_session
+            kernel_manager.nanoid_to_session[nanoid_session] = session_id
+        nanoid_session = kernel_manager.session_to_nanoid[session_id]
     
     # Run in sandbox
     result = kernel_manager.execute_code(session_id, req.code)
@@ -446,18 +452,20 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
     structured_files = []
     
     # Initialize file mapping for this session
-    if nanoid_session not in _file_id_map:
-        _file_id_map[nanoid_session] = {}
+    with kernel_manager.lock:
+        if nanoid_session not in kernel_manager.file_id_map:
+            kernel_manager.file_id_map[nanoid_session] = {}
     
     for f in current_files:
         mime_type, _ = mimetypes.guess_type(f)
         # Generate or reuse nanoid for this file
-        existing_ids = {v: k for k, v in _file_id_map[nanoid_session].items()}
-        if f in existing_ids:
-            nanoid_file = existing_ids[f]
-        else:
-            nanoid_file = generate_nanoid()
-            _file_id_map[nanoid_session][nanoid_file] = f
+        with kernel_manager.lock:
+            existing_ids = {v: k for k, v in kernel_manager.file_id_map[nanoid_session].items()}
+            if f in existing_ids:
+                nanoid_file = existing_ids[f]
+            else:
+                nanoid_file = generate_nanoid()
+                kernel_manager.file_id_map[nanoid_session][nanoid_file] = f
         structured_files.append({
             "id": nanoid_file,
             "name": f,
@@ -526,12 +534,13 @@ async def download_session_file(
     Uses FileResponse to ensure perfect streaming header compatibility with LibreChat's Axios proxy.
     """
     # Resolve nanoid session ID to real UUID session ID
-    real_session_id = _nanoid_to_session.get(session_id, session_id)
-    
-    # Resolve nanoid file ID to real filename
-    real_filename = filename
-    if session_id in _file_id_map and filename in _file_id_map[session_id]:
-        real_filename = _file_id_map[session_id][filename]
+    with kernel_manager.lock:
+        real_session_id = kernel_manager.nanoid_to_session.get(session_id, session_id)
+
+        # Resolve nanoid file ID to real filename
+        real_filename = filename
+        if session_id in kernel_manager.file_id_map and filename in kernel_manager.file_id_map[session_id]:
+            real_filename = kernel_manager.file_id_map[session_id][filename]
     
     content, mtime = kernel_manager.download_file(real_session_id, real_filename)
 
