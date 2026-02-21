@@ -83,7 +83,7 @@ docker compose up -d --build
 Add these to your LibreChat `.env`:
 ```dotenv
 LIBRECHAT_CODE_BASEURL=http://<YOUR_API_HOST>:8000
-LIBRECHAT_CODE_API_KEY=your_secret_key
+LIBRECHAT_CODE_API_KEY=your_secure_api_key_here
 ```
 
 ### Local Development (Without Docker Compose)
@@ -115,7 +115,7 @@ All settings are controlled via environment variables in the `.env` file:
 
 | Variable | Default | Description |
 |---|---|---|
-| `LIBRECHAT_CODE_API_KEY` | `your_secret_key` | API key for authentication |
+| `LIBRECHAT_CODE_API_KEY` | (None) | API key for authentication (Required) |
 | `RCE_IMAGE_NAME` | `custom-rce-kernel:latest` | Docker image to spawn for sandboxes |
 | `RCE_MEM_LIMIT` | `512m` | Memory limit per sandbox container |
 | `RCE_CPU_LIMIT` | `500000000` | CPU quota in nanoseconds (0.5 CPU) |

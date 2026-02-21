@@ -23,7 +23,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Configuration
-API_KEY = os.environ.get("LIBRECHAT_CODE_API_KEY", "your_secret_key")
+API_KEY = os.environ.get("LIBRECHAT_CODE_API_KEY")
 RCE_SESSION_TTL = int(os.environ.get("RCE_SESSION_TTL", "3600"))
 RCE_MAX_SESSIONS = int(os.environ.get("RCE_MAX_SESSIONS", "100"))
 
@@ -35,6 +35,10 @@ async def get_api_key(
     api_key_h: Optional[str] = Security(api_key_header),
     api_key_q: Optional[str] = Query(None, alias="api_key")
 ):
+    if not API_KEY:
+        logger.error("LIBRECHAT_CODE_API_KEY environment variable is not set. API is inaccessible.")
+        raise HTTPException(status_code=500, detail="API Key not configured on server")
+
     key = api_key_h or api_key_q
     if key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API Key")

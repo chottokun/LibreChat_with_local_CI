@@ -9,6 +9,7 @@ sys.modules['docker'] = MagicMock()
 import main
 
 class TestHappyPath(unittest.TestCase):
+    @patch('main.API_KEY', 'test_key')
     @patch('main.kernel_manager')
     def test_run_code_success(self, mock_kernel_manager):
         # Setup mock
@@ -23,7 +24,7 @@ class TestHappyPath(unittest.TestCase):
 
         response = client.post(
             "/run/exec",
-            headers={"X-API-Key": "your_secret_key"},
+            headers={"X-API-Key": "test_key"},
             json={"code": "print('hello world')", "session_id": "test_session"}
         )
 

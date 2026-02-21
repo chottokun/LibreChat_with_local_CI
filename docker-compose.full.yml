@@ -48,7 +48,7 @@ services:
       - MEILI_MASTER_KEY=${MEILI_MASTER_KEY:-your_master_key}
       - CONFIG_PATH=${CONFIG_PATH:-/app/librechat.yaml}
       - LIBRECHAT_CODE_BASEURL=${LIBRECHAT_CODE_BASEURL:-http://librechat_code_interpreter_api:8000}
-      - LIBRECHAT_CODE_API_KEY=${LIBRECHAT_CODE_API_KEY:-your_secret_key}
+      - LIBRECHAT_CODE_API_KEY=${LIBRECHAT_CODE_API_KEY}
       - CONFIG_BYPASS_VALIDATION=${CONFIG_BYPASS_VALIDATION:-true}
       - ALLOW_REGISTRATION=${ALLOW_REGISTRATION:-true}
       - JWT_SECRET=${JWT_SECRET:-32_char_secret_key_used_for_testing_123}

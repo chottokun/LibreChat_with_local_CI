@@ -83,7 +83,7 @@ docker compose up -d --build
 LibreChatの `.env` に以下を追加して、このAPIに向くように設定してください：
 ```dotenv
 LIBRECHAT_CODE_BASEURL=http://<あなたのAPIホスト>:8000
-LIBRECHAT_CODE_API_KEY=your_secret_key
+LIBRECHAT_CODE_API_KEY=your_secure_api_key_here
 ```
 
 ### ローカル開発 (Docker Composeを使わない場合)
@@ -115,7 +115,7 @@ docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
 
 | 変数名 | デフォルト値 | 説明 |
 |---|---|---|
-| `LIBRECHAT_CODE_API_KEY` | `your_secret_key` | 認証用のAPIキー |
+| `LIBRECHAT_CODE_API_KEY` | (None) | 認証用のAPIキー（必須設定） |
 | `RCE_IMAGE_NAME` | `custom-rce-kernel:latest` | サンドボックスとして起動するDockerイメージ名 |
 | `RCE_MEM_LIMIT` | `512m` | サンドボックスコンテナ1つあたりのメモリ制限 |
 | `RCE_CPU_LIMIT` | `500000000` | CPUクオータ (ナノ秒)。デフォルトは0.5 CPU |

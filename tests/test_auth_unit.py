@@ -44,3 +44,11 @@ def test_get_api_key_invalid():
             asyncio.run(main.get_api_key("wrong-key"))
         assert excinfo.value.status_code == 401
         assert excinfo.value.detail == "Invalid API Key"
+
+def test_get_api_key_unconfigured():
+    """Test get_api_key when API_KEY is not set."""
+    with patch("main.API_KEY", None):
+        with pytest.raises(HTTPException) as excinfo:
+            asyncio.run(main.get_api_key("some-key"))
+        assert excinfo.value.status_code == 500
+        assert excinfo.value.detail == "API Key not configured on server"

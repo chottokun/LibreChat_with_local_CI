@@ -1,6 +1,6 @@
 #!/bin/bash
 BASE_URL="http://localhost:8000"
-API_KEY="your_secret_key"
+API_KEY="${LIBRECHAT_CODE_API_KEY:-test_key}"
 PASS=0
 FAIL=0
 

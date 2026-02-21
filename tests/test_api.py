@@ -5,7 +5,12 @@ import os
 
 # Mock docker.from_env before importing main
 with patch("docker.from_env") as mock_from_env:
-    from main import app, API_KEY
+    import main
+    from main import app
+
+# Set a dummy API key for testing
+main.API_KEY = "test_key"
+API_KEY = main.API_KEY
 
 client = TestClient(app)
 
