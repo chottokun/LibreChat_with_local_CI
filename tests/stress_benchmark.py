@@ -1,7 +1,6 @@
 import asyncio
 import aiohttp
 import time
-import os
 import sys
 
 # Test configuration

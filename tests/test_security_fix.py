@@ -1,7 +1,6 @@
 import unittest
 import os
-import docker
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 class TestSecurityFix(unittest.TestCase):
     def test_docker_client_uses_env_host(self):
