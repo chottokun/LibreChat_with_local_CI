@@ -11,7 +11,12 @@ import main
 class TestHappyPath(unittest.TestCase):
     @patch('main.kernel_manager')
     def test_run_code_success(self, mock_kernel_manager):
-        # Setup mock
+        # Setup mock attributes
+        mock_kernel_manager.session_to_nanoid = {}
+        mock_kernel_manager.nanoid_to_session = {}
+        mock_kernel_manager.file_id_map = {}
+
+        # Setup mock methods
         mock_kernel_manager.execute_code.return_value = {
             "stdout": "hello world\n",
             "stderr": "",
