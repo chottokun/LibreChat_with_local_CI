@@ -11,3 +11,9 @@ wheels/
 
 # Environment variables file
 .env
+
+# Code Interpreter session data
+sessions/
+fix_path.py
+pr_diff.txt
+test_upload.txt

@@ -167,7 +167,7 @@ def test_list_files_success(kernel_manager):
     # Assert
     assert files == ["file1.txt", "file2.py"]
     kernel_manager.get_or_create_container.assert_called_once_with(session_id)
-    mock_container.exec_run.assert_called_once_with(cmd=["ls", "-1", "/usr/src/app"])
+    mock_container.exec_run.assert_called_once_with(cmd=["ls", "-1", "/mnt/data"])
 
 def test_list_files_failure(kernel_manager):
     # Setup
