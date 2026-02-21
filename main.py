@@ -9,10 +9,11 @@ import time
 import asyncio
 import string
 import random
-from fastapi import FastAPI, HTTPException, Security, UploadFile, File, Form, Query
+from fastapi import FastAPI, HTTPException, Security, UploadFile, File, Form, Query, BackgroundTasks
 from fastapi.security import APIKeyHeader
 from fastapi.responses import Response, FileResponse
 import mimetypes
+import tempfile
 from pydantic import BaseModel
 from typing import List, Optional, Dict
 import shutil
@@ -487,6 +488,7 @@ async def list_session_files(session_id: str, key: str = Security(get_api_key)):
 @app.get("/download")
 @app.get("/run/download")
 async def download_file_query(
+    background_tasks: BackgroundTasks,
     session_id: str = Query(...),
     filename: str = Query(...),
     key: str = Security(get_api_key)
@@ -494,12 +496,17 @@ async def download_file_query(
     """
     Downloads a file from a session's sandbox using query parameters.
     """
-    return await download_session_file(session_id, filename, key)
+    return await download_session_file(session_id, filename, background_tasks, key)
 
 @app.get("/api/files/code/download/{session_id}/{filename}")
 @app.get("/download/{session_id}/{filename}")
 @app.get("/run/download/{session_id}/{filename}")
-async def download_session_file(session_id: str, filename: str, key: Optional[str] = Security(get_api_key)):
+async def download_session_file(
+    session_id: str,
+    filename: str,
+    background_tasks: BackgroundTasks,
+    key: Optional[str] = Security(get_api_key)
+):
     """
     Downloads a file from a session's sandbox using path parameters.
     Supports nanoid-format IDs (used by LibreChat) and direct session_id/filename.
@@ -523,15 +530,17 @@ async def download_session_file(session_id: str, filename: str, key: Optional[st
     # Use inline for images and PDFs to allow them to be displayed in the chat interface
     disposition = "inline" if mime_type.startswith(("image/", "application/pdf")) else "attachment"
     
-    # Save the file to /tmp so FastAPI can stream it natively via FileResponse
-    import os
-    tmp_filepath = f"/tmp/{real_session_id}_{real_filename}"
-    with open(tmp_filepath, "wb") as f:
-        f.write(content)
+    # Create a secure temporary file to prevent path traversal and disk exhaustion
+    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+        tmp.write(content)
+        tmp_filepath = tmp.name
+
+    # Ensure the temporary file is deleted after the response is sent
+    background_tasks.add_task(os.remove, tmp_filepath)
 
     return FileResponse(
         path=tmp_filepath,
-        filename=real_filename,
+        filename=os.path.basename(real_filename),
         media_type=mime_type,
         content_disposition_type=disposition
     )
