@@ -425,10 +425,10 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
     nanoid_session = _session_to_nanoid[session_id]
     
     # Run in sandbox
-    result = kernel_manager.execute_code(session_id, req.code)
+    result = await asyncio.to_thread(kernel_manager.execute_code, session_id, req.code)
     
     # List generated files and format them for LibreChat native ingestion
-    current_files = kernel_manager.list_files(session_id)
+    current_files = await asyncio.to_thread(kernel_manager.list_files, session_id)
     structured_files = []
     
     # Initialize file mapping for this session
@@ -472,7 +472,7 @@ async def upload_files(
     session_id = entity_id
     for file in files:
         content = await file.read()
-        kernel_manager.upload_file(session_id, file.filename, content)
+        await asyncio.to_thread(kernel_manager.upload_file, session_id, file.filename, content)
     
     return {"status": "ok", "files": [f.filename for f in files]}
 
@@ -481,7 +481,7 @@ async def list_session_files(session_id: str, key: str = Security(get_api_key)):
     """
     Lists files in a session's sandbox.
     """
-    files = kernel_manager.list_files(session_id)
+    files = await asyncio.to_thread(kernel_manager.list_files, session_id)
     return {"files": files}
 
 @app.get("/download")
@@ -513,7 +513,7 @@ async def download_session_file(session_id: str, filename: str, key: Optional[st
     if session_id in _file_id_map and filename in _file_id_map[session_id]:
         real_filename = _file_id_map[session_id][filename]
     
-    content, mtime = kernel_manager.download_file(real_session_id, real_filename)
+    content, mtime = await asyncio.to_thread(kernel_manager.download_file, real_session_id, real_filename)
 
     # Guess MIME type
     mime_type, _ = mimetypes.guess_type(real_filename)
@@ -526,8 +526,12 @@ async def download_session_file(session_id: str, filename: str, key: Optional[st
     # Save the file to /tmp so FastAPI can stream it natively via FileResponse
     import os
     tmp_filepath = f"/tmp/{real_session_id}_{real_filename}"
-    with open(tmp_filepath, "wb") as f:
-        f.write(content)
+
+    def _save_file():
+        with open(tmp_filepath, "wb") as f:
+            f.write(content)
+
+    await asyncio.to_thread(_save_file)
 
     return FileResponse(
         path=tmp_filepath,
