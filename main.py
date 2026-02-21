@@ -25,7 +25,10 @@ logger = logging.getLogger(__name__)
 
 # Configuration
 API_KEY = os.environ.get("LIBRECHAT_CODE_API_KEY", "your_secret_key")
-RCE_DATA_DIR = os.environ.get("RCE_DATA_DIR") # Optional: Host path for volume mounting
+# RCE_DATA_DIR_HOST is the path on the Docker Host (used for mounting)
+RCE_DATA_DIR_HOST = os.environ.get("RCE_DATA_DIR_HOST", os.environ.get("RCE_DATA_DIR"))
+# RCE_DATA_DIR_INTERNAL is the path inside this API container (used for writing files)
+RCE_DATA_DIR_INTERNAL = os.environ.get("RCE_DATA_DIR_INTERNAL", "/app/shared_volumes/sessions")
 RCE_SESSION_TTL = int(os.environ.get("RCE_SESSION_TTL", "3600"))
 RCE_MAX_SESSIONS = int(os.environ.get("RCE_MAX_SESSIONS", "100"))
 RCE_MANAGED_BY_VALUE = "librechat-rce"
@@ -205,11 +208,13 @@ class KernelManager:
 
         try:
             volumes = {}
-            if RCE_DATA_DIR:
-                session_dir = os.path.join(RCE_DATA_DIR, session_id)
-                os.makedirs(session_dir, exist_ok=True)
-                # Note: This assumes RCE_DATA_DIR is a path that both the API and Docker Host agree on.
-                volumes = {session_dir: {'bind': '/usr/src/app', 'mode': 'rw'}}
+            if RCE_DATA_DIR_HOST:
+                # Use HOST path for Docker mounting, but ensure INTERNAL path exists for writing
+                session_dir_host = os.path.join(RCE_DATA_DIR_HOST, session_id)
+                session_dir_internal = os.path.join(RCE_DATA_DIR_INTERNAL, session_id)
+                os.makedirs(session_dir_internal, exist_ok=True)
+                
+                volumes = {session_dir_host: {'bind': '/mnt/data', 'mode': 'rw'}}
 
             container = DOCKER_CLIENT.containers.run(
                 image=RCE_IMAGE_NAME,
@@ -221,7 +226,7 @@ class KernelManager:
                 network_disabled=not network_enabled,
                 device_requests=device_requests,
                 name=f"rce_{session_id}_{uuid.uuid4().hex[:6]}",
-                working_dir="/usr/src/app",
+                working_dir="/mnt/data",
                 labels={
                     "managed_by": RCE_MANAGED_BY_VALUE,
                     "session_id": session_id
@@ -230,7 +235,7 @@ class KernelManager:
                 volumes=volumes
             )
             # Ensure workspace exists
-            container.exec_run(cmd=["mkdir", "-p", "/usr/src/app"])
+            container.exec_run(cmd=["mkdir", "-p", "/mnt/data"])
             self.active_kernels[session_id] = {
                 "container": container,
                 "last_accessed": time.time()
@@ -286,9 +291,9 @@ class KernelManager:
 
                     data = self.active_kernels.pop(session_id, None)
 
-                # Cleanup host session directory if volume mounting was used
-                if RCE_DATA_DIR:
-                    session_dir = os.path.join(RCE_DATA_DIR, session_id)
+                # Cleanup internal session directory if volume mounting was used
+                if RCE_DATA_DIR_INTERNAL:
+                    session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, session_id)
                     if os.path.exists(session_dir):
                         shutil.rmtree(session_dir, ignore_errors=True)
 
@@ -315,12 +320,12 @@ class KernelManager:
         if not safe_filename:
             raise HTTPException(status_code=400, detail="Invalid filename")
 
-        if RCE_DATA_DIR:
-            session_dir = os.path.join(RCE_DATA_DIR, session_id)
+        if RCE_DATA_DIR_HOST:
+            session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, session_id)
             os.makedirs(session_dir, exist_ok=True)
             with open(os.path.join(session_dir, safe_filename), "wb") as f:
                 f.write(content)
-            logger.info("Uploaded file %s to volume for session %s", safe_filename, session_id)
+            logger.info("Uploaded file %s to volume (internal: %s) for session %s", safe_filename, session_dir, session_id)
             # Ensure container exists (even if it doesn't need to do anything now)
             self.get_or_create_container(session_id)
         else:
@@ -331,7 +336,7 @@ class KernelManager:
                 tar_info.size = len(content)
                 tar.addfile(tar_info, io.BytesIO(content))
 
-            container.put_archive("/usr/src/app", tar_stream.getvalue())
+            container.put_archive("/mnt/data", tar_stream.getvalue())
             logger.info("Uploaded file %s to session %s via put_archive", safe_filename, session_id)
 
     def download_file(self, session_id: str, filename: str):
@@ -340,8 +345,8 @@ class KernelManager:
         if not safe_filename:
             raise HTTPException(status_code=400, detail="Invalid filename")
 
-        if RCE_DATA_DIR:
-            session_dir = os.path.join(RCE_DATA_DIR, session_id)
+        if RCE_DATA_DIR_HOST:
+            session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, session_id)
             filepath = os.path.join(session_dir, safe_filename)
             if os.path.exists(filepath):
                 with open(filepath, "rb") as f:
@@ -353,7 +358,7 @@ class KernelManager:
             container = self.get_or_create_container(session_id)
             try:
                 # get_archive returns a tuple: (stream, stat)
-                bits, stat = container.get_archive(f"/usr/src/app/{safe_filename}")
+                bits, stat = container.get_archive(f"/mnt/data/{safe_filename}")
 
                 # Extract from tar bits
                 tar_stream = io.BytesIO(b"".join(bits))
@@ -373,7 +378,7 @@ class KernelManager:
     def list_files(self, session_id: str):
         container = self.get_or_create_container(session_id)
         # We list files and their sizes/mtimes if possible, or just names for now
-        res = container.exec_run(cmd=["ls", "-1", "/usr/src/app"])
+        res = container.exec_run(cmd=["ls", "-1", "/mnt/data"])
         if res.exit_code == 0:
             files = res.output.decode('utf-8').splitlines()
             return [f for f in files if f]
@@ -392,7 +397,7 @@ class KernelManager:
         # to avoid shell escaping issues and command line length limits.
         
         code_filename = f"exec_{uuid.uuid4().hex}.py"
-        container_path = f"/usr/src/app/{code_filename}"
+        container_path = f"/mnt/data/{code_filename}"
         
         try:
             # 1. Apply code wrapping for expression-only support
@@ -402,18 +407,18 @@ class KernelManager:
             def _run_with_retry(km, container, code_content, path, filename):
                 tar_stream = io.BytesIO()
                 with tarfile.open(fileobj=tar_stream, mode='w') as tar:
-                    # Injected code to ensure /usr/src/app is in path
+                    # Injected code to ensure /mnt/data is in path
                     # although running from there should handle it.
                     code_bytes = code_content.encode('utf-8')
                     tar_info = tarfile.TarInfo(name=filename)
                     tar_info.size = len(code_bytes)
                     tar.addfile(tar_info, io.BytesIO(code_bytes))
                 
-                container.put_archive("/usr/src/app", tar_stream.getvalue())
+                container.put_archive("/mnt/data", tar_stream.getvalue())
                 
                 return container.exec_run(
                     cmd=["python3", path],
-                    workdir="/usr/src/app",
+                    workdir="/mnt/data",
                     demux=True
                 )
 
@@ -460,6 +465,8 @@ class CodeRequest(BaseModel):
     user_id: Optional[str] = None
     files: Optional[List[FileInput]] = []
     args: Optional[List[str]] = []
+    class Config:
+        extra = "allow"
 
 class FileInfo(BaseModel):
     id: str
@@ -489,8 +496,22 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
     """
     Executes code in a sandboxed Docker container.
     """
+    logger.info("Exec request received. Request body: %s", req.dict())
+    
+    # Extract session_id from files array if root session_id is missing (LibreChat behavior)
+    effective_session_id = req.session_id
+    if not effective_session_id and req.files and len(req.files) > 0:
+        # Pydantic parses this into FileInput objects, or it's a dict if extra fields are allowed
+        first_file = req.files[0]
+        if hasattr(first_file, "session_id") and getattr(first_file, "session_id"):
+            effective_session_id = first_file.session_id
+        elif isinstance(first_file, dict) and "session_id" in first_file:
+            effective_session_id = first_file["session_id"]
+            
+    logger.info("Effective session ID for exec: %s", effective_session_id)
+
     # Resolve nanoid session ID if provided
-    original_id = sanitize_id(req.session_id) or str(uuid.uuid4())
+    original_id = sanitize_id(effective_session_id) or str(uuid.uuid4())
     real_session_id = kernel_manager.resolve_session_id(original_id)
     
     # Generate or reuse a nanoid-compatible session ID for LibreChat
@@ -540,51 +561,100 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
         "files": structured_files
     }
 
+from fastapi import Request
+
 @app.post("/upload")
 async def upload_files(
-    entity_id: str = Form(...),
-    files: List[UploadFile] = File(...),
+    request: Request,
     key: str = Security(get_api_key)
 ):
     """
     Uploads files to a specific session sandbox.
     """
-    # Resolve nanoid session ID if provided
-    real_session_id = kernel_manager.resolve_session_id(sanitize_id(entity_id))
+    try:
+        form = await request.form()
+        # Log everything for debugging
+        logger.info("Upload request received. Form fields: %s", list(form.keys()))
+        
+        # Support both 'entity_id' (LibreChat default) and 'session_id'
+        sid = form.get("entity_id") or form.get("session_id") or request.query_params.get("session_id")
+        if not sid:
+            # If no session ID is provided, we generate one.
+            sid = generate_nanoid()
+            logger.info("No session ID provided in upload. Generated new one: %s", sid)
 
-    # Get or create nanoid session ID for response
-    with kernel_manager.lock:
-        if real_session_id not in kernel_manager.session_to_nanoid:
-            nanoid_session = generate_nanoid()
-            kernel_manager.session_to_nanoid[real_session_id] = nanoid_session
-            kernel_manager.nanoid_to_session[nanoid_session] = real_session_id
-        else:
-            nanoid_session = kernel_manager.session_to_nanoid[real_session_id]
+        # Handle 'files' or 'file' field
+        files = form.getlist("files") or form.getlist("file")
+        if not files:
+            logger.error("No files found in form. Fields: %s", list(form.keys()))
+            raise HTTPException(status_code=422, detail="No files provided")
 
-    uploaded_files = []
-    for file in files:
-        content = await file.read()
-        kernel_manager.upload_file(real_session_id, file.filename, content)
+        logger.info("Files found in request: %s (Types: %s)", files, [type(f) for f in files])
 
-        # Ensure file mapping exists
+        # Resolve nanoid session ID if provided
+        # If the provided sid looks like a nanoid, we should probably treat it as such.
+        # But we must be careful not to use it as the internal UUID directly if we want isolation.
+        # However, for LibreChat consistency, if it sends an ID, we should use that as our 'nanoid_session' handle.
+        real_session_id = kernel_manager.resolve_session_id(sanitize_id(sid))
+
+        # Get or create nanoid session ID for response
         with kernel_manager.lock:
-            if nanoid_session not in kernel_manager.file_id_map:
-                kernel_manager.file_id_map[nanoid_session] = {}
+            if real_session_id == sid:
+                # This was a new ID provided by LibreChat or generated by us.
+                # If it's not already in our maps, let's use it as the nanoid handle.
+                if sid not in kernel_manager.nanoid_to_session:
+                    # For consistency, we can use the same SID as the internal ID IF it's safe.
+                    # Or we generation a UUID and map it. Let's use it as the map key.
+                    internal_uuid = str(uuid.uuid4())
+                    kernel_manager.nanoid_to_session[sid] = internal_uuid
+                    kernel_manager.session_to_nanoid[internal_uuid] = sid
+                    real_session_id = internal_uuid
+                    logger.info("Mapped provided SID %s to new internal UUID %s", sid, internal_uuid)
+                else:
+                    real_session_id = kernel_manager.nanoid_to_session[sid]
+            
+            nanoid_session = kernel_manager.session_to_nanoid.get(real_session_id, sid)
 
-            existing_ids = {v: k for k, v in kernel_manager.file_id_map[nanoid_session].items()}
-            if file.filename in existing_ids:
-                file_id = existing_ids[file.filename]
-            else:
-                file_id = generate_nanoid()
-                kernel_manager.file_id_map[nanoid_session][file_id] = file.filename
+        uploaded_files = []
+        for file in files:
+            # Check if it's a starlette.datastructures.UploadFile
+            if not hasattr(file, "filename") or not hasattr(file, "read"):
+                logger.warning("Skipping file-like object that lacks required attributes: %s", type(file))
+                continue
+            content = await file.read()
+            kernel_manager.upload_file(real_session_id, file.filename, content)
 
-        uploaded_files.append({"fileId": file_id, "filename": file.filename})
-    
-    return {
-        "message": "success",
-        "session_id": nanoid_session,
-        "files": uploaded_files
-    }
+            # Ensure file mapping exists
+            with kernel_manager.lock:
+                if nanoid_session not in kernel_manager.file_id_map:
+                    kernel_manager.file_id_map[nanoid_session] = {}
+
+                existing_ids = {v: k for k, v in kernel_manager.file_id_map[nanoid_session].items()}
+                if file.filename in existing_ids:
+                    file_id = existing_ids[file.filename]
+                else:
+                    file_id = generate_nanoid()
+                    kernel_manager.file_id_map[nanoid_session][file_id] = file.filename
+
+            uploaded_files.append({"fileId": file_id, "filename": file.filename})
+        
+        # Standardize response structure: LibreChat might expect these at root if singular
+        res = {
+            "message": "success",
+            "session_id": nanoid_session,
+            "files": uploaded_files
+        }
+        # Flatten the first file for root-level access
+        if uploaded_files:
+            res.update(uploaded_files[0])
+            
+        logger.info("Upload returning success. Response: %s", res)
+        return res
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error processing upload")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/files/{session_id}")
 async def list_session_files(session_id: str, key: str = Security(get_api_key)):
@@ -593,7 +663,20 @@ async def list_session_files(session_id: str, key: str = Security(get_api_key)):
     """
     real_session_id = kernel_manager.resolve_session_id(sanitize_id(session_id))
     files = kernel_manager.list_files(real_session_id)
-    return {"files": files}
+    
+    file_list = []
+    nanoid_session = kernel_manager.session_to_nanoid.get(real_session_id, sanitize_id(session_id))
+    with kernel_manager.lock:
+        id_map = kernel_manager.file_id_map.get(nanoid_session, {})
+        reversed_map = {v: k for k, v in id_map.items()}
+        for f in files:
+            file_list.append({
+                "filename": f,
+                "fileId": reversed_map.get(f, ""),
+                "id": reversed_map.get(f, "")
+            })
+            
+    return file_list
 
 @app.get("/download")
 @app.get("/run/download")
@@ -636,8 +719,8 @@ async def download_session_file(
             real_filename = kernel_manager.file_id_map[s_session_id][s_filename]
     
     # Determine the file path if volume mounting is enabled
-    if RCE_DATA_DIR:
-        session_dir = os.path.join(RCE_DATA_DIR, real_session_id)
+    if RCE_DATA_DIR_INTERNAL:
+        session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, real_session_id)
         filepath = os.path.join(session_dir, real_filename)
         if not os.path.exists(filepath):
              raise HTTPException(status_code=404, detail="File not found")
