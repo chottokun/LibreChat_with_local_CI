@@ -1,16 +1,52 @@
 import sys
 from unittest.mock import MagicMock, patch
+
+# --- Dependency Mocking for Unit Testing ---
+# We mock external libraries to ensure tests are fast, deterministic, and runnable
+# even if the dependencies are not installed in the local environment.
+
+# 1. Mock Docker
+mock_docker = MagicMock()
+sys.modules.setdefault("docker", mock_docker)
+
+class DockerError(Exception): pass
+class NotFound(DockerError):
+    def __init__(self, message, response=None):
+        super().__init__(message)
+        self.response = response
+mock_docker.errors.NotFound = NotFound
+
+# 2. Mock FastAPI
+mock_fastapi = MagicMock()
+class HTTPException(Exception):
+    def __init__(self, status_code, detail=None):
+        self.status_code = status_code
+        self.detail = detail
+mock_fastapi.HTTPException = HTTPException
+sys.modules.setdefault("fastapi", mock_fastapi)
+sys.modules.setdefault("fastapi.security", MagicMock())
+sys.modules.setdefault("fastapi.responses", MagicMock())
+
+# 3. Mock Pydantic
+class BaseModel:
+    def __init__(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+mock_pydantic = MagicMock()
+mock_pydantic.BaseModel = BaseModel
+sys.modules.setdefault("pydantic", mock_pydantic)
+
+# --- Test Imports ---
 import pytest
-import docker
 import time
+import docker
 from fastapi import HTTPException
 
-# We need to mock docker before importing main because main.py calls docker.from_env() at module level
+# Mock docker.from_env before importing main
 mock_docker_client = MagicMock()
+mock_docker.from_env.return_value = mock_docker_client
 
-with patch("docker.from_env", return_value=mock_docker_client):
-    import main
-
+import main
 from main import KernelManager
 
 @pytest.fixture(autouse=True)
@@ -66,17 +102,19 @@ def test_get_or_create_container_missing_during_reload(kernel_manager):
     # Setup
     session_id = "test_session"
     mock_container = MagicMock()
-    # Use main.docker to ensure the same module is used as in main.py
     mock_response = MagicMock()
     mock_response.status_code = 404
     mock_response.reason = "Not Found"
-    mock_container.reload.side_effect = main.docker.errors.NotFound("Gone", response=mock_response)
+
+    # Use pre-defined NotFound exception
+    mock_container.reload.side_effect = NotFound("Gone", response=mock_response)
+
     kernel_manager.active_kernels[session_id] = {
         "container": mock_container,
         "last_accessed": time.time()
     }
 
-    # Mock start_new_container_unlocked on the instance (since it's called internally)
+    # Mock start_new_container_unlocked on the instance
     new_container = MagicMock()
     kernel_manager.start_new_container_unlocked = MagicMock(return_value=new_container)
 
@@ -110,3 +148,42 @@ def test_start_new_container_failure(kernel_manager):
 
     assert excinfo.value.status_code == 500
     assert "Failed to start sandbox" in excinfo.value.detail
+
+def test_list_files_success(kernel_manager):
+    # Setup
+    session_id = "test_session"
+    mock_container = MagicMock()
+    kernel_manager.get_or_create_container = MagicMock(return_value=mock_container)
+
+    # Mock ExecResult
+    mock_res = MagicMock()
+    mock_res.exit_code = 0
+    mock_res.output = b"file1.txt\nfile2.py\n\n"
+    mock_container.exec_run.return_value = mock_res
+
+    # Execute
+    files = kernel_manager.list_files(session_id)
+
+    # Assert
+    assert files == ["file1.txt", "file2.py"]
+    kernel_manager.get_or_create_container.assert_called_once_with(session_id)
+    mock_container.exec_run.assert_called_once_with(cmd=["ls", "-1", "/usr/src/app"])
+
+def test_list_files_failure(kernel_manager):
+    # Setup
+    session_id = "test_session"
+    mock_container = MagicMock()
+    kernel_manager.get_or_create_container = MagicMock(return_value=mock_container)
+
+    # Mock ExecResult failure
+    mock_res = MagicMock()
+    mock_res.exit_code = 1
+    mock_container.exec_run.return_value = mock_res
+
+    # Execute
+    files = kernel_manager.list_files(session_id)
+
+    # Assert
+    assert files == []
+    kernel_manager.get_or_create_container.assert_called_once_with(session_id)
+    mock_container.exec_run.assert_called_once()
