@@ -448,12 +448,18 @@ class KernelManager:
 kernel_manager = KernelManager()
 
 # 3. Request/Response Schemas
+class FileInput(BaseModel):
+    session_id: str
+    id: str
+    name: str
+
 class CodeRequest(BaseModel):
     code: str
     lang: Optional[str] = "py"
     session_id: Optional[str] = None
     user_id: Optional[str] = None
-    files: Optional[List[str]] = []
+    files: Optional[List[FileInput]] = []
+    args: Optional[List[str]] = []
 
 class FileInfo(BaseModel):
     id: str
@@ -546,11 +552,39 @@ async def upload_files(
     # Resolve nanoid session ID if provided
     real_session_id = kernel_manager.resolve_session_id(sanitize_id(entity_id))
 
+    # Get or create nanoid session ID for response
+    with kernel_manager.lock:
+        if real_session_id not in kernel_manager.session_to_nanoid:
+            nanoid_session = generate_nanoid()
+            kernel_manager.session_to_nanoid[real_session_id] = nanoid_session
+            kernel_manager.nanoid_to_session[nanoid_session] = real_session_id
+        else:
+            nanoid_session = kernel_manager.session_to_nanoid[real_session_id]
+
+    uploaded_files = []
     for file in files:
         content = await file.read()
         kernel_manager.upload_file(real_session_id, file.filename, content)
+
+        # Ensure file mapping exists
+        with kernel_manager.lock:
+            if nanoid_session not in kernel_manager.file_id_map:
+                kernel_manager.file_id_map[nanoid_session] = {}
+
+            existing_ids = {v: k for k, v in kernel_manager.file_id_map[nanoid_session].items()}
+            if file.filename in existing_ids:
+                file_id = existing_ids[file.filename]
+            else:
+                file_id = generate_nanoid()
+                kernel_manager.file_id_map[nanoid_session][file_id] = file.filename
+
+        uploaded_files.append({"fileId": file_id, "filename": file.filename})
     
-    return {"status": "ok", "files": [f.filename for f in files]}
+    return {
+        "message": "success",
+        "session_id": nanoid_session,
+        "files": uploaded_files
+    }
 
 @app.get("/files/{session_id}")
 async def list_session_files(session_id: str, key: str = Security(get_api_key)):
