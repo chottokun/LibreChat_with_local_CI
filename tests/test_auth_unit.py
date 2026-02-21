@@ -14,18 +14,25 @@ class MockHTTPException(Exception):
         self.detail = detail
         self.headers = headers
 
-if "fastapi" not in sys.modules:
-    mock_fastapi = MagicMock()
-    mock_fastapi.HTTPException = MockHTTPException
-    sys.modules["fastapi"] = mock_fastapi
-    sys.modules["fastapi.security"] = MagicMock()
-    sys.modules["fastapi.responses"] = MagicMock()
-    sys.modules["docker"] = MagicMock()
-    sys.modules["pydantic"] = MagicMock()
+# Check if dependencies are available before mocking
+try:
+    import fastapi
+    import docker
+    import pydantic
+    from fastapi import HTTPException
+except ImportError:
+    if "fastapi" not in sys.modules:
+        mock_fastapi = MagicMock()
+        mock_fastapi.HTTPException = MockHTTPException
+        sys.modules["fastapi"] = mock_fastapi
+        sys.modules["fastapi.security"] = MagicMock()
+        sys.modules["fastapi.responses"] = MagicMock()
+        sys.modules["docker"] = MagicMock()
+        sys.modules["pydantic"] = MagicMock()
+    from fastapi import HTTPException
 
 # Now we can safely import from main
 import main
-from fastapi import HTTPException
 
 def test_get_api_key_valid():
     """Test get_api_key with a valid key using direct variable mocking."""
@@ -44,3 +51,32 @@ def test_get_api_key_invalid():
             asyncio.run(main.get_api_key("wrong-key"))
         assert excinfo.value.status_code == 401
         assert excinfo.value.detail == "Invalid API Key"
+
+def test_get_api_key_header_precedence():
+    """Test that header takes precedence over query parameter when both are present and header is valid."""
+    with patch("main.API_KEY", "valid-key"):
+        # Header valid, query invalid -> should succeed because header is checked first
+        result = asyncio.run(main.get_api_key("valid-key", "invalid-key"))
+        assert result == "valid-key"
+
+def test_get_api_key_header_invalid_query_valid():
+    """Test that if an invalid header is provided, it fails even if a valid query parameter is also provided."""
+    with patch("main.API_KEY", "valid-key"):
+        # Header invalid, query valid -> should FAIL because header takes precedence
+        with pytest.raises(HTTPException) as excinfo:
+            asyncio.run(main.get_api_key("invalid-key", "valid-key"))
+        assert excinfo.value.status_code == 401
+
+def test_get_api_key_query_fallback():
+    """Test that if no header is provided, it correctly uses a valid query parameter."""
+    with patch("main.API_KEY", "valid-key"):
+        # Header None, query valid -> should succeed
+        result = asyncio.run(main.get_api_key(None, "valid-key"))
+        assert result == "valid-key"
+
+def test_get_api_key_both_missing():
+    """Test that if neither header nor query parameter is provided, it fails."""
+    with patch("main.API_KEY", "valid-key"):
+        with pytest.raises(HTTPException) as excinfo:
+            asyncio.run(main.get_api_key(None, None))
+        assert excinfo.value.status_code == 401
