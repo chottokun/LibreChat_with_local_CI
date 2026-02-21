@@ -120,48 +120,78 @@ class KernelManager:
     def __init__(self):
         self.active_kernels = {} # Maps session_id to dict with container and last_accessed
         self.lock = threading.Lock()
+        self.session_locks = {} # session_id -> Lock
+
+    def _get_session_lock(self, session_id: str) -> threading.Lock:
+        with self.lock:
+            if session_id not in self.session_locks:
+                self.session_locks[session_id] = threading.Lock()
+            return self.session_locks[session_id]
 
     def get_or_create_container(self, session_id: str, force_refresh: bool = False):
+        # 1. Quick check under global lock
         with self.lock:
             if not force_refresh and session_id in self.active_kernels:
-                self.active_kernels[session_id]["last_accessed"] = time.time()
-                return self.active_kernels[session_id]["container"]
+                data = self.active_kernels[session_id]
+                if "container" in data:
+                    data["last_accessed"] = time.time()
+                    return data["container"]
 
-            if session_id in self.active_kernels:
+        # 2. Acquire per-session lock for slow operations (creation/refresh)
+        # This allows multiple sessions to be created/refreshed in parallel.
+        sess_lock = self._get_session_lock(session_id)
+        with sess_lock:
+            # Double-check under global lock after acquiring session lock
+            with self.lock:
+                if not force_refresh and session_id in self.active_kernels:
+                    data = self.active_kernels[session_id]
+                    if "container" in data:
+                        data["last_accessed"] = time.time()
+                        return data["container"]
+
+                # If session exists but we are here, it needs refresh or restart
+                container_data = self.active_kernels.get(session_id)
+
+            if container_data:
                 try:
-                    # Re-fetch or refresh container status
-                    container = self.active_kernels[session_id]["container"]
-                    # If we have an object, we can try to reload it to get fresh status
+                    container = container_data["container"]
+                    # reload and start are slow, so we do them outside the global lock
+                    # but inside the session lock.
                     try:
                         container.reload()
                     except docker.errors.NotFound:
-                        # If reload fails, it's gone
-                        del self.active_kernels[session_id]
-                        return self.start_new_container_unlocked(session_id)
+                        # If reload fails, it's gone.
+                        with self.lock:
+                            self.active_kernels.pop(session_id, None)
+                        return self.start_new_container(session_id)
 
                     if container.status == "running":
-                        self.active_kernels[session_id]["last_accessed"] = time.time()
+                        with self.lock:
+                            if session_id in self.active_kernels:
+                                self.active_kernels[session_id]["last_accessed"] = time.time()
                         return container
                     else:
                         # Restart if stopped
                         container.start()
-                        self.active_kernels[session_id]["last_accessed"] = time.time()
+                        with self.lock:
+                            if session_id in self.active_kernels:
+                                self.active_kernels[session_id]["last_accessed"] = time.time()
                         return container
                 except Exception:
                     # Any other error, try to start fresh
-                    del self.active_kernels[session_id]
+                    with self.lock:
+                        self.active_kernels.pop(session_id, None)
 
-            return self.start_new_container_unlocked(session_id)
+            return self.start_new_container(session_id)
 
     def start_new_container(self, session_id: str):
+        # Enforce max sessions under global lock and reserve slot
         with self.lock:
-            return self.start_new_container_unlocked(session_id)
-
-    def start_new_container_unlocked(self, session_id: str):
-        # Enforce max sessions
-        if len(self.active_kernels) >= RCE_MAX_SESSIONS:
-            logger.warning("Max sessions reached: %d", RCE_MAX_SESSIONS)
-            raise HTTPException(status_code=503, detail="Server is at capacity. Please try again later.")
+            if len(self.active_kernels) >= RCE_MAX_SESSIONS:
+                logger.warning("Max sessions reached: %d", RCE_MAX_SESSIONS)
+                raise HTTPException(status_code=503, detail="Server is at capacity. Please try again later.")
+            # Reserve slot to prevent race conditions during parallel creation
+            self.active_kernels[session_id] = {"status": "creating", "last_accessed": time.time()}
 
         # Configuration from environment variables
         mem_limit = os.environ.get("RCE_MEM_LIMIT", "512m")
@@ -195,12 +225,16 @@ class KernelManager:
             )
             # Ensure workspace exists
             container.exec_run(cmd=["mkdir", "-p", "/usr/src/app"])
-            self.active_kernels[session_id] = {
-                "container": container,
-                "last_accessed": time.time()
-            }
+            with self.lock:
+                self.active_kernels[session_id] = {
+                    "container": container,
+                    "last_accessed": time.time()
+                }
             return container
         except Exception as e:
+            # Remove reservation on failure
+            with self.lock:
+                self.active_kernels.pop(session_id, None)
             logger.exception("Failed to start sandbox for session %s", session_id)
             raise HTTPException(status_code=500, detail="Failed to start sandbox. Please contact an administrator.")
 
@@ -243,6 +277,7 @@ class KernelManager:
             try:
                 with self.lock:
                     data = self.active_kernels.pop(session_id, None)
+                    self.session_locks.pop(session_id, None)
                 if data:
                     container = data["container"]
                     container.stop(timeout=5)
@@ -405,7 +440,7 @@ class CodeResponse(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     # Recover existing containers
-    kernel_manager.recover_containers()
+    await asyncio.to_thread(kernel_manager.recover_containers)
     # Start cleanup background task
     asyncio.create_task(kernel_manager.cleanup_loop())
 
@@ -425,10 +460,10 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
     nanoid_session = _session_to_nanoid[session_id]
     
     # Run in sandbox
-    result = kernel_manager.execute_code(session_id, req.code)
+    result = await asyncio.to_thread(kernel_manager.execute_code, session_id, req.code)
     
     # List generated files and format them for LibreChat native ingestion
-    current_files = kernel_manager.list_files(session_id)
+    current_files = await asyncio.to_thread(kernel_manager.list_files, session_id)
     structured_files = []
     
     # Initialize file mapping for this session
@@ -472,7 +507,7 @@ async def upload_files(
     session_id = entity_id
     for file in files:
         content = await file.read()
-        kernel_manager.upload_file(session_id, file.filename, content)
+        await asyncio.to_thread(kernel_manager.upload_file, session_id, file.filename, content)
     
     return {"status": "ok", "files": [f.filename for f in files]}
 
@@ -481,7 +516,7 @@ async def list_session_files(session_id: str, key: str = Security(get_api_key)):
     """
     Lists files in a session's sandbox.
     """
-    files = kernel_manager.list_files(session_id)
+    files = await asyncio.to_thread(kernel_manager.list_files, session_id)
     return {"files": files}
 
 @app.get("/download")
@@ -513,7 +548,7 @@ async def download_session_file(session_id: str, filename: str, key: Optional[st
     if session_id in _file_id_map and filename in _file_id_map[session_id]:
         real_filename = _file_id_map[session_id][filename]
     
-    content, mtime = kernel_manager.download_file(real_session_id, real_filename)
+    content, mtime = await asyncio.to_thread(kernel_manager.download_file, real_session_id, real_filename)
 
     # Guess MIME type
     mime_type, _ = mimetypes.guess_type(real_filename)
@@ -526,8 +561,12 @@ async def download_session_file(session_id: str, filename: str, key: Optional[st
     # Save the file to /tmp so FastAPI can stream it natively via FileResponse
     import os
     tmp_filepath = f"/tmp/{real_session_id}_{real_filename}"
-    with open(tmp_filepath, "wb") as f:
-        f.write(content)
+
+    def _write_file(path, data):
+        with open(path, "wb") as f:
+            f.write(data)
+
+    await asyncio.to_thread(_write_file, tmp_filepath, content)
 
     return FileResponse(
         path=tmp_filepath,
