@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 # Configuration
 API_KEY = os.environ.get("LIBRECHAT_CODE_API_KEY", "your_secret_key")
+RCE_DATA_DIR = os.environ.get("RCE_DATA_DIR") # Optional: Host path for volume mounting
 RCE_SESSION_TTL = int(os.environ.get("RCE_SESSION_TTL", "3600"))
 RCE_MAX_SESSIONS = int(os.environ.get("RCE_MAX_SESSIONS", "100"))
 RCE_MANAGED_BY_VALUE = "librechat-rce"
@@ -120,6 +121,14 @@ _NANOID_ALPHABET = string.ascii_letters + string.digits + '_-'
 def generate_nanoid(size: int = 21) -> str:
     return ''.join(secrets.choice(_NANOID_ALPHABET) for _ in range(size))
 
+def sanitize_id(id_str: str) -> str:
+    """Sanitizes an ID to allow only alphanumeric, hyphen, and underscore."""
+    if not id_str:
+        return ""
+    # Remove any characters that are not alphanumeric, hyphen, or underscore
+    # This prevents path traversal and other injection attacks.
+    return "".join(c for c in id_str if c.isalnum() or c in ('-', '_'))
+
 # 2. Kernel Manager for Session Management
 class KernelManager:
     """
@@ -133,6 +142,12 @@ class KernelManager:
         self.nanoid_to_session: Dict[str, str] = {}
         self.session_to_nanoid: Dict[str, str] = {}
         self.file_id_map: Dict[str, Dict[str, str]] = {}  # {nanoid_session_id: {nanoid_file_id: filename}}
+
+    def resolve_session_id(self, session_id: str) -> str:
+        """Resolves a potential nanoid session ID to the real internal session ID."""
+        sanitized_id = sanitize_id(session_id)
+        with self.lock:
+            return self.nanoid_to_session.get(sanitized_id, sanitized_id)
 
     def get_or_create_container(self, session_id: str, force_refresh: bool = False):
         with self.lock:
@@ -189,6 +204,13 @@ class KernelManager:
             )
 
         try:
+            volumes = {}
+            if RCE_DATA_DIR:
+                session_dir = os.path.join(RCE_DATA_DIR, session_id)
+                os.makedirs(session_dir, exist_ok=True)
+                # Note: This assumes RCE_DATA_DIR is a path that both the API and Docker Host agree on.
+                volumes = {session_dir: {'bind': '/usr/src/app', 'mode': 'rw'}}
+
             container = DOCKER_CLIENT.containers.run(
                 image=RCE_IMAGE_NAME,
                 command="tail -f /dev/null", # Keep alive
@@ -204,7 +226,8 @@ class KernelManager:
                     "managed_by": RCE_MANAGED_BY_VALUE,
                     "session_id": session_id
                 },
-                environment={"PYTHONUNBUFFERED": "1"}
+                environment={"PYTHONUNBUFFERED": "1"},
+                volumes=volumes
             )
             # Ensure workspace exists
             container.exec_run(cmd=["mkdir", "-p", "/usr/src/app"])
@@ -262,6 +285,13 @@ class KernelManager:
                         self.file_id_map.pop(nanoid_session, None)
 
                     data = self.active_kernels.pop(session_id, None)
+
+                # Cleanup host session directory if volume mounting was used
+                if RCE_DATA_DIR:
+                    session_dir = os.path.join(RCE_DATA_DIR, session_id)
+                    if os.path.exists(session_dir):
+                        shutil.rmtree(session_dir, ignore_errors=True)
+
                 if data:
                     container = data["container"]
                     container.stop(timeout=5)
@@ -280,46 +310,65 @@ class KernelManager:
             await asyncio.sleep(60) # Run every minute
 
     def upload_file(self, session_id: str, filename: str, content: bytes):
-        container = self.get_or_create_container(session_id)
         # Sanitize filename to prevent path traversal
         safe_filename = os.path.basename(filename)
         if not safe_filename:
             raise HTTPException(status_code=400, detail="Invalid filename")
-        
-        tar_stream = io.BytesIO()
-        with tarfile.open(fileobj=tar_stream, mode='w') as tar:
-            tar_info = tarfile.TarInfo(name=safe_filename)
-            tar_info.size = len(content)
-            tar.addfile(tar_info, io.BytesIO(content))
-        
-        container.put_archive("/usr/src/app", tar_stream.getvalue())
-        logger.info("Uploaded file %s to session %s", safe_filename, session_id)
+
+        if RCE_DATA_DIR:
+            session_dir = os.path.join(RCE_DATA_DIR, session_id)
+            os.makedirs(session_dir, exist_ok=True)
+            with open(os.path.join(session_dir, safe_filename), "wb") as f:
+                f.write(content)
+            logger.info("Uploaded file %s to volume for session %s", safe_filename, session_id)
+            # Ensure container exists (even if it doesn't need to do anything now)
+            self.get_or_create_container(session_id)
+        else:
+            container = self.get_or_create_container(session_id)
+            tar_stream = io.BytesIO()
+            with tarfile.open(fileobj=tar_stream, mode='w') as tar:
+                tar_info = tarfile.TarInfo(name=safe_filename)
+                tar_info.size = len(content)
+                tar.addfile(tar_info, io.BytesIO(content))
+
+            container.put_archive("/usr/src/app", tar_stream.getvalue())
+            logger.info("Uploaded file %s to session %s via put_archive", safe_filename, session_id)
 
     def download_file(self, session_id: str, filename: str):
-        container = self.get_or_create_container(session_id)
         # Sanitize filename to prevent path traversal
         safe_filename = os.path.basename(filename)
         if not safe_filename:
             raise HTTPException(status_code=400, detail="Invalid filename")
 
-        try:
-            # get_archive returns a tuple: (stream, stat)
-            bits, stat = container.get_archive(f"/usr/src/app/{safe_filename}")
-            
-            # Extract from tar bits
-            tar_stream = io.BytesIO(b"".join(bits))
-            with tarfile.open(fileobj=tar_stream, mode='r') as tar:
-                # Use the first member from the tar archive for robustness
-                members = tar.getmembers()
-                if not members:
-                    raise FileNotFoundError()
-                f = tar.extractfile(members[0])
-                if f:
-                    return f.read(), stat.get('mtime', 0)
+        if RCE_DATA_DIR:
+            session_dir = os.path.join(RCE_DATA_DIR, session_id)
+            filepath = os.path.join(session_dir, safe_filename)
+            if os.path.exists(filepath):
+                with open(filepath, "rb") as f:
+                    content = f.read()
+                mtime = os.path.getmtime(filepath)
+                return content, mtime
             raise FileNotFoundError()
-        except Exception as e:
-            logger.error("Failed to download file %s from session %s: %s", filename, session_id, e)
-            raise HTTPException(status_code=404, detail="File not found")
+        else:
+            container = self.get_or_create_container(session_id)
+            try:
+                # get_archive returns a tuple: (stream, stat)
+                bits, stat = container.get_archive(f"/usr/src/app/{safe_filename}")
+
+                # Extract from tar bits
+                tar_stream = io.BytesIO(b"".join(bits))
+                with tarfile.open(fileobj=tar_stream, mode='r') as tar:
+                    # Use the first member from the tar archive for robustness
+                    members = tar.getmembers()
+                    if not members:
+                        raise FileNotFoundError()
+                    f = tar.extractfile(members[0])
+                    if f:
+                        return f.read(), stat.get('mtime', 0)
+                raise FileNotFoundError()
+            except Exception as e:
+                logger.error("Failed to download file %s from session %s: %s", filename, session_id, e)
+                raise HTTPException(status_code=404, detail="File not found")
 
     def list_files(self, session_id: str):
         container = self.get_or_create_container(session_id)
@@ -434,21 +483,24 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
     """
     Executes code in a sandboxed Docker container.
     """
-    session_id = req.session_id or str(uuid.uuid4())
+    # Resolve nanoid session ID if provided
+    original_id = sanitize_id(req.session_id) or str(uuid.uuid4())
+    real_session_id = kernel_manager.resolve_session_id(original_id)
     
     # Generate or reuse a nanoid-compatible session ID for LibreChat
     with kernel_manager.lock:
-        if session_id not in kernel_manager.session_to_nanoid:
+        if real_session_id not in kernel_manager.session_to_nanoid:
             nanoid_session = generate_nanoid()
-            kernel_manager.session_to_nanoid[session_id] = nanoid_session
-            kernel_manager.nanoid_to_session[nanoid_session] = session_id
-        nanoid_session = kernel_manager.session_to_nanoid[session_id]
+            kernel_manager.session_to_nanoid[real_session_id] = nanoid_session
+            kernel_manager.nanoid_to_session[nanoid_session] = real_session_id
+        else:
+            nanoid_session = kernel_manager.session_to_nanoid[real_session_id]
     
     # Run in sandbox
-    result = kernel_manager.execute_code(session_id, req.code)
+    result = kernel_manager.execute_code(real_session_id, req.code)
     
     # List generated files and format them for LibreChat native ingestion
-    current_files = kernel_manager.list_files(session_id)
+    current_files = kernel_manager.list_files(real_session_id)
     structured_files = []
     
     # Initialize file mapping for this session
@@ -491,10 +543,12 @@ async def upload_files(
     """
     Uploads files to a specific session sandbox.
     """
-    session_id = entity_id
+    # Resolve nanoid session ID if provided
+    real_session_id = kernel_manager.resolve_session_id(sanitize_id(entity_id))
+
     for file in files:
         content = await file.read()
-        kernel_manager.upload_file(session_id, file.filename, content)
+        kernel_manager.upload_file(real_session_id, file.filename, content)
     
     return {"status": "ok", "files": [f.filename for f in files]}
 
@@ -503,7 +557,8 @@ async def list_session_files(session_id: str, key: str = Security(get_api_key)):
     """
     Lists files in a session's sandbox.
     """
-    files = kernel_manager.list_files(session_id)
+    real_session_id = kernel_manager.resolve_session_id(sanitize_id(session_id))
+    files = kernel_manager.list_files(real_session_id)
     return {"files": files}
 
 @app.get("/download")
@@ -533,16 +588,35 @@ async def download_session_file(
     Supports nanoid-format IDs (used by LibreChat) and direct session_id/filename.
     Uses FileResponse to ensure perfect streaming header compatibility with LibreChat's Axios proxy.
     """
+    # Sanitize inputs
+    s_session_id = sanitize_id(session_id)
+    s_filename = os.path.basename(filename) # filename can contain dots, but not path segments
+
     # Resolve nanoid session ID to real UUID session ID
     with kernel_manager.lock:
-        real_session_id = kernel_manager.nanoid_to_session.get(session_id, session_id)
+        real_session_id = kernel_manager.nanoid_to_session.get(s_session_id, s_session_id)
 
         # Resolve nanoid file ID to real filename
-        real_filename = filename
-        if session_id in kernel_manager.file_id_map and filename in kernel_manager.file_id_map[session_id]:
-            real_filename = kernel_manager.file_id_map[session_id][filename]
+        real_filename = s_filename
+        if s_session_id in kernel_manager.file_id_map and s_filename in kernel_manager.file_id_map[s_session_id]:
+            real_filename = kernel_manager.file_id_map[s_session_id][s_filename]
     
-    content, mtime = kernel_manager.download_file(real_session_id, real_filename)
+    # Determine the file path if volume mounting is enabled
+    if RCE_DATA_DIR:
+        session_dir = os.path.join(RCE_DATA_DIR, real_session_id)
+        filepath = os.path.join(session_dir, real_filename)
+        if not os.path.exists(filepath):
+             raise HTTPException(status_code=404, detail="File not found")
+        tmp_filepath = filepath
+        cleanup_needed = False
+    else:
+        # Fallback to Docker API (get_archive)
+        content, mtime = kernel_manager.download_file(real_session_id, real_filename)
+        # Create a secure temporary file
+        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+            tmp.write(content)
+            tmp_filepath = tmp.name
+        cleanup_needed = True
 
     # Guess MIME type
     mime_type, _ = mimetypes.guess_type(real_filename)
@@ -552,13 +626,9 @@ async def download_session_file(
     # Use inline for images and PDFs to allow them to be displayed in the chat interface
     disposition = "inline" if mime_type.startswith(("image/", "application/pdf")) else "attachment"
     
-    # Create a secure temporary file to prevent path traversal and disk exhaustion
-    with tempfile.NamedTemporaryFile(delete=False) as tmp:
-        tmp.write(content)
-        tmp_filepath = tmp.name
-
-    # Ensure the temporary file is deleted after the response is sent
-    background_tasks.add_task(os.remove, tmp_filepath)
+    # Ensure temporary file is deleted if it was created
+    if cleanup_needed:
+        background_tasks.add_task(os.remove, tmp_filepath)
 
     return FileResponse(
         path=tmp_filepath,
