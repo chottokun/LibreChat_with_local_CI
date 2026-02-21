@@ -20,6 +20,10 @@ LibreChat sends the `session_id` inside the `files` array payload for its `/exec
 ### 6. File Download Errors (404)
 Even though files were generated and uploaded correctly, clicking the UI file chip resulted in a 404 error. The API's `/download` endpoint was attempting to resolve the file path using `RCE_DATA_DIR` (`/mnt/data` inside the sandbox) instead of `RCE_DATA_DIR_INTERNAL` (`/app/shared_volumes/sessions/` on the API container). I fixed the path resolution logic to correctly serve the file from the API's internal volume mapping.
 
+### 7. File Type Restrictions (.jsonl, etc.)
+LibreChat has internal validation for file types. Some formats like `.jsonl` may be blocked by the frontend/backend with an "Unable to determine file type" error before they even reach the Code Interpreter API.
+**Workaround:** Rename `.jsonl` files to `.json` or `.txt` before uploading. The Python code in the sandbox will still be able to parse the content as JSONL.
+
 
 ## Verification Evidence
 
