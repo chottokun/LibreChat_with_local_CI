@@ -100,5 +100,5 @@ def test_start_new_container_adds_labels(km):
     # Assert
     args, kwargs = mock_docker_client.containers.run.call_args
     assert "labels" in kwargs
-    assert kwargs["labels"]["managed_by"] == "librechat-rce"
+    assert kwargs["labels"]["managed_by"] == main.RCE_MANAGED_BY_VALUE
     assert kwargs["labels"]["session_id"] == session_id
