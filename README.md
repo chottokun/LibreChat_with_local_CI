@@ -122,6 +122,23 @@ docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
 | `RCE_MAX_SESSIONS` | `100` | 同時に起動できるサンドボックスコンテナの最大数 |
 | `RCE_NETWORK_ENABLED` | `false` | サンドボックス内からの外部インターネットアクセスを許可するか |
 | `RCE_GPU_ENABLED` | `false` | サンドボックスへのGPUパススルーを有効にするか |
+| `RCE_DATA_DIR` | (なし) | ホスト側のデータ保存用ディレクトリ（これと `./sessions` のマウントが必要、詳細は下記） |
+
+### 📁 ファイル保存と永続化 (Volume Mounting)
+
+アップロードしたファイルや実行結果を保持するためには、ホスト側のディレクトリをAPIコンテナに正しくマウントし、環境変数を設定する必要があります：
+
+1. **`.env`**:
+   ```dotenv
+   RCE_DATA_DIR=/absolute/path/to/your/sessions
+   ```
+2. **`docker-compose.yml`**:
+   ```yaml
+   volumes:
+     - ${RCE_DATA_DIR}:/app/shared_volumes/sessions
+   ```
+
+これにより、API内部の `/app/shared_volumes/sessions` がホスト側の実ディレクトリと同期され、サンドボックスコンテナ内の `/mnt/data` との間で安全にファイルが受け渡しされます。
 
 ---
 

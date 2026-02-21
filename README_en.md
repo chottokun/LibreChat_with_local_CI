@@ -122,6 +122,23 @@ All settings are controlled via environment variables in the `.env` file:
 | `RCE_MAX_SESSIONS` | `100` | Maximum number of concurrent sandbox containers |
 | `RCE_NETWORK_ENABLED` | `false` | Allow internet access inside the sandbox |
 | `RCE_GPU_ENABLED` | `false` | Enable GPU passthrough to the sandbox |
+| `RCE_DATA_DIR` | (None) | Host path for session data persistence (must be mounted, see below) |
+
+### 📁 File Persistence & Volume Mounting
+
+To ensure uploaded files and execution outputs are preserved, you must correctly mount a host directory to the API container and set corresponding environment variables:
+
+1. **`.env`**:
+   ```dotenv
+   RCE_DATA_DIR=/absolute/path/to/your/sessions
+   ```
+2. **`docker-compose.yml`**:
+   ```yaml
+   volumes:
+     - ${RCE_DATA_DIR}:/app/shared_volumes/sessions
+   ```
+
+This setup ensures that the API's `/app/shared_volumes/sessions` directory is synchronized with your host machine, allowing files to be safely passed to the sandbox's `/mnt/data` directory.
 
 ---
 
