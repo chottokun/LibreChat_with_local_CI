@@ -63,3 +63,23 @@ def test_run_code_no_session_id(mock_list_files, mock_execute):
     mock_execute.assert_called_once()
     args, kwargs = mock_execute.call_args
     assert len(args[0]) > 0  # session_id generated
+
+@patch("main.kernel_manager.list_files")
+def test_auth_precedence_header_wins(mock_list_files):
+    mock_list_files.return_value = []
+    # Valid header, invalid query param -> should succeed
+    response = client.get("/files/test", headers={"X-API-Key": API_KEY}, params={"api_key": "wrong_key"})
+    assert response.status_code == 200
+
+def test_auth_precedence_invalid_header_fails():
+    # Invalid header, valid query param -> should fail 401
+    # Because the header is present (not None), it's chosen as 'key', and then validated.
+    response = client.get("/files/test", headers={"X-API-Key": "wrong_key"}, params={"api_key": API_KEY})
+    assert response.status_code == 401
+
+@patch("main.kernel_manager.list_files")
+def test_auth_query_fallback_success(mock_list_files):
+    mock_list_files.return_value = []
+    # No header, valid query param -> should succeed
+    response = client.get("/files/test", params={"api_key": API_KEY})
+    assert response.status_code == 200
