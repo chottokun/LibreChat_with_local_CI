@@ -26,6 +26,9 @@ services:
       - RCE_MEM_LIMIT=${RCE_MEM_LIMIT:-512m}
       - RCE_CPU_LIMIT=${RCE_CPU_LIMIT:-500000000}
       - RCE_GPU_ENABLED=${RCE_GPU_ENABLED:-false}
+      - RCE_DATA_DIR=${RCE_DATA_DIR}
+    volumes:
+      - ${RCE_DATA_DIR}:${RCE_DATA_DIR}
     depends_on:
       - docker-proxy
     restart: unless-stopped
