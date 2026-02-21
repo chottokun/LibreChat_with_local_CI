@@ -472,7 +472,7 @@ async def upload_files(
     session_id = entity_id
     for file in files:
         content = await file.read()
-        kernel_manager.upload_file(session_id, file.filename, content)
+        await asyncio.to_thread(kernel_manager.upload_file, session_id, file.filename, content)
     
     return {"status": "ok", "files": [f.filename for f in files]}
 
