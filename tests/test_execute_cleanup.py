@@ -1,43 +1,10 @@
-import sys
-from unittest.mock import MagicMock, patch, ANY
-
-# Mock docker and fastapi before importing main
-mock_docker = MagicMock()
-sys.modules['docker'] = mock_docker
-
-# Create real exception classes for the mocks to avoid TypeError during exception handling
-class MockDockerError(Exception): pass
-class MockAPIError(MockDockerError): pass
-class MockNotFound(MockDockerError): pass
-
-mock_docker.errors = MagicMock()
-mock_docker.errors.APIError = MockAPIError
-mock_docker.errors.NotFound = MockNotFound
-sys.modules['docker.errors'] = mock_docker.errors
-
-mock_fastapi = MagicMock()
-sys.modules['fastapi'] = mock_fastapi
-sys.modules['fastapi.security'] = MagicMock()
-sys.modules['fastapi.responses'] = MagicMock()
-
-mock_pydantic = MagicMock()
-sys.modules['pydantic'] = mock_pydantic
-
 import pytest
-
-# Mock HTTPException
-class MockHTTPException(Exception):
-    def __init__(self, status_code, detail=None):
-        self.status_code = status_code
-        self.detail = detail
-
-mock_fastapi.HTTPException = MockHTTPException
-
+from unittest.mock import MagicMock, patch
 import main
-# Ensure main uses our MockHTTPException
-main.HTTPException = MockHTTPException
+from main import KernelManager, HTTPException
 
-from main import KernelManager
+# Note: We don't mock sys.modules anymore to avoid breaking other tests.
+# Instead, we patch the dependencies used by KernelManager directly.
 
 def test_execute_code_cleanup_success():
     km = KernelManager()
@@ -55,7 +22,7 @@ def test_execute_code_cleanup_success():
     mock_container.exec_run.return_value = mock_exec_result
 
     # Mock uuid to have a predictable filename
-    with patch('uuid.uuid4') as mock_uuid:
+    with patch('main.uuid.uuid4') as mock_uuid:
         mock_uuid.return_value.hex = "123456"
         expected_filename = "exec_123456.py"
         expected_path = f"/usr/src/app/{expected_filename}"
@@ -84,9 +51,10 @@ def test_execute_code_cleanup_on_failure():
     km.get_or_create_container = MagicMock(return_value=mock_container)
 
     # Mock exec_run to raise an exception during execution
+    # Second mock result is for the 'rm' cleanup call
     mock_container.exec_run.side_effect = [Exception("Execution failed"), MagicMock()]
 
-    with patch('uuid.uuid4') as mock_uuid:
+    with patch('main.uuid.uuid4') as mock_uuid:
         mock_uuid.return_value.hex = "123456"
         expected_path = "/usr/src/app/exec_123456.py"
 
@@ -118,7 +86,9 @@ def test_execute_code_cleanup_on_exec_retry():
     km.get_or_create_container = MagicMock(side_effect=[mock_container1, mock_container2])
 
     # First attempt fails with NotFound
-    mock_container1.exec_run.side_effect = MockNotFound("Container gone")
+    # We need to mock docker.errors.NotFound if it's used in main
+    from docker.errors import NotFound
+    mock_container1.exec_run.side_effect = NotFound("Container gone")
 
     # Second attempt (retry) succeeds
     mock_exec_result = MagicMock()
@@ -126,7 +96,7 @@ def test_execute_code_cleanup_on_exec_retry():
     mock_exec_result.exit_code = 0
     mock_container2.exec_run.return_value = mock_exec_result
 
-    with patch('uuid.uuid4') as mock_uuid:
+    with patch('main.uuid.uuid4') as mock_uuid:
         mock_uuid.return_value.hex = "retry_hex"
         expected_path = "/usr/src/app/exec_retry_hex.py"
 
