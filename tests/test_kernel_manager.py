@@ -1,5 +1,5 @@
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 # --- Dependency Mocking for Unit Testing ---
 # We mock external libraries to ensure tests are fast, deterministic, and runnable
@@ -39,7 +39,6 @@ sys.modules.setdefault("pydantic", mock_pydantic)
 # --- Test Imports ---
 import pytest
 import time
-import docker
 from fastapi import HTTPException
 
 # Mock docker.from_env before importing main

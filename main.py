@@ -9,7 +9,7 @@ import time
 import asyncio
 import string
 import secrets
-from fastapi import FastAPI, HTTPException, Security, UploadFile, File, Form, Query, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Security, Query, BackgroundTasks, Request
 from fastapi.security import APIKeyHeader
 from fastapi.responses import FileResponse
 import mimetypes
@@ -241,7 +241,7 @@ class KernelManager:
                 "last_accessed": time.time()
             }
             return container
-        except Exception as e:
+        except Exception:
             logger.exception("Failed to start sandbox for session %s", session_id)
             raise HTTPException(status_code=500, detail="Failed to start sandbox. Please contact an administrator.")
 
@@ -440,14 +440,14 @@ class KernelManager:
             
         except HTTPException:
             raise
-        except Exception as e:
+        except Exception:
             logger.exception("Error executing code in session %s", session_id)
             raise HTTPException(status_code=500, detail="An internal error occurred during code execution.")
         finally:
             # 3. Cleanup: remove the temporary file
             try:
                 container.exec_run(cmd=["rm", container_path])
-            except:
+            except Exception:
                 pass
 
 kernel_manager = KernelManager()
@@ -560,8 +560,6 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
         "session_id": nanoid_session,
         "files": structured_files
     }
-
-from fastapi import Request
 
 @app.post("/upload")
 async def upload_files(
