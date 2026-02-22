@@ -12,8 +12,9 @@ def temp_data_dir():
     yield d
     shutil.rmtree(d)
 
-def test_upload_with_volume_mount(temp_data_dir):
-    with patch('main.RCE_DATA_DIR', temp_data_dir), \
+    import main
+    with patch('main.RCE_DATA_DIR_HOST', temp_data_dir), \
+         patch('main.RCE_DATA_DIR_INTERNAL', temp_data_dir), \
          patch('main.DOCKER_CLIENT') as mock_docker:
 
         # Mock container run

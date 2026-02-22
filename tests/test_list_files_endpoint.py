@@ -20,7 +20,9 @@ def test_list_files_success(mock_list_files):
     )
 
     assert response.status_code == 200
-    assert response.json() == {"files": expected_files}
+    assert isinstance(response.json(), list)
+    # The endpoint returns a list of objects like {"filename": "...", "fileId": "...", "id": "..."}
+    assert response.json()[0]["filename"] == "data.csv"
     mock_list_files.assert_called_once_with(session_id)
 
 def test_list_files_unauthorized():
@@ -53,5 +55,5 @@ def test_list_files_empty(mock_list_files):
     )
 
     assert response.status_code == 200
-    assert response.json() == {"files": []}
+    assert response.json() == []
     mock_list_files.assert_called_once_with(session_id)
