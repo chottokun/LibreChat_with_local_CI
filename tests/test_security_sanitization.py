@@ -32,7 +32,8 @@ def test_path_traversal_blocked_upload():
         mock_km.resolve_session_id.assert_called_with("malicious")
 
 def test_path_traversal_blocked_download():
-    with patch('main.kernel_manager') as mock_km:
+    with patch('main.kernel_manager') as mock_km, \
+         patch('main.RCE_DATA_DIR_INTERNAL', None):
         mock_km.nanoid_to_session = {}
         mock_km.file_id_map = {}
         mock_km.download_file.return_value = (b"content", 123456789)

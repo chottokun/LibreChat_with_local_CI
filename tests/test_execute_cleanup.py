@@ -25,7 +25,7 @@ def test_execute_code_cleanup_success():
     with patch('main.uuid.uuid4') as mock_uuid:
         mock_uuid.return_value.hex = "123456"
         expected_filename = "exec_123456.py"
-        expected_path = f"/usr/src/app/{expected_filename}"
+        expected_path = f"/mnt/data/{expected_filename}"
 
         # Execute
         result = km.execute_code(session_id, code)
@@ -56,7 +56,7 @@ def test_execute_code_cleanup_on_failure():
 
     with patch('main.uuid.uuid4') as mock_uuid:
         mock_uuid.return_value.hex = "123456"
-        expected_path = "/usr/src/app/exec_123456.py"
+        expected_path = "/mnt/data/exec_123456.py"
 
         # Execute - should raise HTTPException(500)
         with pytest.raises(main.HTTPException) as excinfo:
@@ -98,7 +98,7 @@ def test_execute_code_cleanup_on_exec_retry():
 
     with patch('main.uuid.uuid4') as mock_uuid:
         mock_uuid.return_value.hex = "retry_hex"
-        expected_path = "/usr/src/app/exec_retry_hex.py"
+        expected_path = "/mnt/data/exec_retry_hex.py"
 
         # Execute
         result = km.execute_code(session_id, code)
