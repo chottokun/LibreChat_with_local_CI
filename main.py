@@ -14,8 +14,8 @@ from fastapi.security import APIKeyHeader
 from fastapi.responses import FileResponse
 import mimetypes
 import tempfile
-from pydantic import BaseModel
-from typing import List, Optional, Dict
+from pydantic import BaseModel, ConfigDict
+from typing import List, Optional, Dict, Any
 import shutil
 import ast
 
@@ -454,33 +454,38 @@ kernel_manager = KernelManager()
 
 # 3. Request/Response Schemas
 class FileInput(BaseModel):
+    model_config = ConfigDict(extra="allow")
     session_id: str
     id: str
     name: str
 
 class CodeRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
     code: str
     lang: Optional[str] = "py"
     session_id: Optional[str] = None
     user_id: Optional[str] = None
     files: Optional[List[FileInput]] = []
     args: Optional[List[str]] = []
-    class Config:
-        extra = "allow"
 
 class FileInfo(BaseModel):
+    model_config = ConfigDict(extra="allow")
     id: str
     name: str
     url: str
     type: str
 
 class CodeResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
     stdout: str
     stderr: str
     exit_code: int
     output: Optional[str] = ""
+    result: Optional[str] = ""  # Alias for stdout/output for some integration paths
+    status: str = "success"     # Explicit status string
     session_id: Optional[str] = None
     files: Optional[List[FileInfo]] = []
+    images: List[Dict[str, Any]] = [] # Matplotlib images or other plot captures
 
 # 4. Endpoints
 @app.on_event("startup")
@@ -496,7 +501,7 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
     """
     Executes code in a sandboxed Docker container.
     """
-    logger.info("Exec request received. Request body: %s", req.dict())
+    logger.info("Exec request received. Request body: %s", req.model_dump())
     
     # Extract session_id from files array if root session_id is missing (LibreChat behavior)
     effective_session_id = req.session_id
@@ -556,9 +561,12 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
         "stdout": result["stdout"],
         "stderr": result["stderr"],
         "exit_code": result["exit_code"],
-        "output": result["stdout"], # Simplified
+        "output": result["stdout"],
+        "result": result["stdout"],
+        "status": "success" if result["exit_code"] == 0 else "error",
         "session_id": nanoid_session,
-        "files": structured_files
+        "files": structured_files,
+        "images": [] # Placeholder for future image capture implementation
     }
 
 from fastapi import Request
