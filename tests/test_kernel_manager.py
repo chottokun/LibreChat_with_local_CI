@@ -53,8 +53,11 @@ from main import KernelManager
 def reset_docker_client():
     main.DOCKER_CLIENT.containers.get.reset_mock()
     main.DOCKER_CLIENT.containers.run.reset_mock()
+    main.DOCKER_CLIENT.containers.list.reset_mock()
     main.DOCKER_CLIENT.containers.get.side_effect = None
+    main.DOCKER_CLIENT.containers.list.side_effect = None
     main.DOCKER_CLIENT.containers.get.return_value = MagicMock()
+    main.DOCKER_CLIENT.containers.list.return_value = []
 
 @pytest.fixture
 def kernel_manager():
@@ -187,3 +190,112 @@ def test_list_files_failure(kernel_manager):
     assert files == []
     kernel_manager.get_or_create_container.assert_called_once_with(session_id)
     mock_container.exec_run.assert_called_once()
+
+def test_recover_containers_success(kernel_manager):
+    # Setup
+    mock_container1 = MagicMock()
+    mock_container1.id = "c1"
+    mock_container1.labels = {"session_id": "s1"}
+
+    mock_container2 = MagicMock()
+    mock_container2.id = "c2"
+    mock_container2.labels = {"session_id": "s2"}
+
+    main.DOCKER_CLIENT.containers.list.return_value = [mock_container1, mock_container2]
+
+    # Execute
+    kernel_manager.recover_containers()
+
+    # Assert
+    assert "s1" in kernel_manager.active_kernels
+    assert "s2" in kernel_manager.active_kernels
+    assert kernel_manager.active_kernels["s1"]["container"] == mock_container1
+    assert kernel_manager.active_kernels["s2"]["container"] == mock_container2
+    main.DOCKER_CLIENT.containers.list.assert_called_once_with(
+        all=True,
+        filters={"label": f"managed_by={main.RCE_MANAGED_BY_VALUE}"}
+    )
+
+def test_recover_containers_list_failure(kernel_manager):
+    # Setup
+    main.DOCKER_CLIENT.containers.list.side_effect = Exception("Docker API error")
+
+    with patch("main.logger") as mock_logger:
+        # Execute
+        kernel_manager.recover_containers()
+
+        # Assert
+        mock_logger.error.assert_called()
+        error_calls = [call for call in mock_logger.error.call_args_list if "Error during container recovery" in call.args[0]]
+        assert len(error_calls) > 0
+        assert "Docker API error" in str(error_calls[0].args[1])
+
+def test_recover_containers_iteration_failure(kernel_manager):
+    # Setup
+    class FailingIterator:
+        def __iter__(self):
+            yield MagicMock()
+            raise Exception("Iteration failed")
+
+    main.DOCKER_CLIENT.containers.list.return_value = FailingIterator()
+
+    with patch("main.logger") as mock_logger:
+        # Execute
+        kernel_manager.recover_containers()
+
+        # Assert
+        mock_logger.error.assert_called()
+        error_calls = [call for call in mock_logger.error.call_args_list if "Error during container recovery" in call.args[0]]
+        assert len(error_calls) > 0
+        assert "Iteration failed" in str(error_calls[0].args[1])
+
+def test_recover_containers_inner_failure(kernel_manager):
+    # Setup
+    mock_container1 = MagicMock()
+    mock_container1.id = "c1"
+    mock_container1.labels = {"session_id": "s1"}
+
+    mock_container2 = MagicMock()
+    mock_container2.id = "c2"
+    mock_container2.labels = {"session_id": "s2"}
+
+    main.DOCKER_CLIENT.containers.list.return_value = [mock_container1, mock_container2]
+
+    with patch("main.logger") as mock_logger:
+        # Make logger.info raise an exception for the first container recovery
+        # The first call is "Scanning for existing containers to recover..."
+        # The second call is "Recovered session s1 from container c1"
+        mock_logger.info.side_effect = [None, Exception("Inner error"), None]
+
+        # Execute
+        kernel_manager.recover_containers()
+
+        # Assert
+        # Check that error was logged for container 1
+        any_failed = any("Failed to recover container" in call.args[0] for call in mock_logger.error.call_args_list)
+        assert any_failed
+
+        # Container 2 should still be in active_kernels
+        assert "s2" in kernel_manager.active_kernels
+
+def test_recover_containers_skips(kernel_manager):
+    # Setup
+    mock_container_no_id = MagicMock()
+    mock_container_no_id.labels = {} # No session_id
+
+    mock_container_exists = MagicMock()
+    mock_container_exists.id = "exists"
+    mock_container_exists.labels = {"session_id": "existing_session"}
+
+    kernel_manager.active_kernels["existing_session"] = {"container": MagicMock()}
+
+    main.DOCKER_CLIENT.containers.list.return_value = [mock_container_no_id, mock_container_exists]
+
+    with patch("main.logger") as mock_logger:
+        # Execute
+        kernel_manager.recover_containers()
+
+        # Assert
+        # Should not have called logger.info with "Recovered"
+        recovered_calls = [call for call in mock_logger.info.call_args_list if "Recovered session" in call.args[0]]
+        assert len(recovered_calls) == 0
