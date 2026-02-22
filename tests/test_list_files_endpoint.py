@@ -20,7 +20,12 @@ def test_list_files_success(mock_list_files):
     )
 
     assert response.status_code == 200
-    assert response.json() == {"files": expected_files}
+    # The API returns a list of dictionaries with filename, fileId, and id
+    json_response = response.json()
+    assert isinstance(json_response, list)
+    assert len(json_response) == len(expected_files)
+    for i, f in enumerate(expected_files):
+        assert json_response[i]["filename"] == f
     mock_list_files.assert_called_once_with(session_id)
 
 def test_list_files_unauthorized():
@@ -53,5 +58,5 @@ def test_list_files_empty(mock_list_files):
     )
 
     assert response.status_code == 200
-    assert response.json() == {"files": []}
+    assert response.json() == []
     mock_list_files.assert_called_once_with(session_id)
