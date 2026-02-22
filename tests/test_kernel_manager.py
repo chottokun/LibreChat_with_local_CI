@@ -1,5 +1,8 @@
 import sys
-from unittest.mock import MagicMock, patch
+import io
+import tarfile
+import os
+from unittest.mock import MagicMock, patch, mock_open
 
 # --- Dependency Mocking for Unit Testing ---
 # We mock external libraries to ensure tests are fast, deterministic, and runnable
@@ -187,3 +190,146 @@ def test_list_files_failure(kernel_manager):
     assert files == []
     kernel_manager.get_or_create_container.assert_called_once_with(session_id)
     mock_container.exec_run.assert_called_once()
+
+def test_upload_file_docker_mode(kernel_manager):
+    # Setup
+    session_id = "test_session"
+    filename = "test.txt"
+    content = b"hello world"
+    mock_container = MagicMock()
+    kernel_manager.get_or_create_container = MagicMock(return_value=mock_container)
+
+    with patch("main.RCE_DATA_DIR_HOST", None):
+        # Execute
+        kernel_manager.upload_file(session_id, filename, content)
+
+    # Assert
+    kernel_manager.get_or_create_container.assert_called_once_with(session_id)
+    mock_container.put_archive.assert_called_once()
+    args, _ = mock_container.put_archive.call_args
+    assert args[0] == "/mnt/data"
+
+    # Verify tar content
+    tar_data = args[1]
+    tar_stream = io.BytesIO(tar_data)
+    with tarfile.open(fileobj=tar_stream, mode='r') as tar:
+        members = tar.getmembers()
+        assert len(members) == 1
+        assert members[0].name == filename
+        assert tar.extractfile(members[0]).read() == content
+
+def test_upload_file_volume_mode(kernel_manager):
+    # Setup
+    session_id = "test_session"
+    filename = "test.txt"
+    content = b"hello volume"
+    mock_container = MagicMock()
+    kernel_manager.get_or_create_container = MagicMock(return_value=mock_container)
+
+    with patch("main.RCE_DATA_DIR_HOST", "/host/path"), \
+         patch("main.RCE_DATA_DIR_INTERNAL", "/internal/path"), \
+         patch("os.makedirs") as mock_makedirs, \
+         patch("builtins.open", mock_open()) as m:
+            # Execute
+            kernel_manager.upload_file(session_id, filename, content)
+
+            # Assert
+            mock_makedirs.assert_called_once_with("/internal/path/test_session", exist_ok=True)
+            m.assert_called_once_with("/internal/path/test_session/test.txt", "wb")
+            m().write.assert_called_once_with(content)
+            kernel_manager.get_or_create_container.assert_called_once_with(session_id)
+
+def test_upload_file_path_traversal(kernel_manager):
+    # Setup
+    session_id = "test_session"
+    filename = "../../../etc/passwd"
+    content = b"malicious"
+    mock_container = MagicMock()
+    kernel_manager.get_or_create_container = MagicMock(return_value=mock_container)
+
+    with patch("main.RCE_DATA_DIR_HOST", None):
+        # Execute
+        kernel_manager.upload_file(session_id, filename, content)
+
+    # Assert: should be sanitized to 'passwd'
+    args, _ = mock_container.put_archive.call_args
+    tar_data = args[1]
+    tar_stream = io.BytesIO(tar_data)
+    with tarfile.open(fileobj=tar_stream, mode='r') as tar:
+        members = tar.getmembers()
+        assert members[0].name == "passwd"
+
+def test_upload_file_invalid_filename(kernel_manager):
+    with pytest.raises(HTTPException) as excinfo:
+        kernel_manager.upload_file("session1", "", b"content")
+    assert excinfo.value.status_code == 400
+
+def test_download_file_docker_mode(kernel_manager):
+    # Setup
+    session_id = "test_session"
+    filename = "test.txt"
+    content = b"download me"
+    mtime = 123456789.0
+
+    mock_container = MagicMock()
+    kernel_manager.get_or_create_container = MagicMock(return_value=mock_container)
+
+    # Create a mock tar archive
+    tar_stream = io.BytesIO()
+    with tarfile.open(fileobj=tar_stream, mode='w') as tar:
+        tar_info = tarfile.TarInfo(name=filename)
+        tar_info.size = len(content)
+        tar.addfile(tar_info, io.BytesIO(content))
+
+    mock_container.get_archive.return_value = ([tar_stream.getvalue()], {"mtime": mtime})
+
+    with patch("main.RCE_DATA_DIR_HOST", None):
+        # Execute
+        downloaded_content, downloaded_mtime = kernel_manager.download_file(session_id, filename)
+
+    # Assert
+    assert downloaded_content == content
+    assert downloaded_mtime == mtime
+    mock_container.get_archive.assert_called_once_with(f"/mnt/data/{filename}")
+
+def test_download_file_volume_mode(kernel_manager):
+    # Setup
+    session_id = "test_session"
+    filename = "test.txt"
+    content = b"volume download"
+    mtime = 987654321.0
+
+    with patch("main.RCE_DATA_DIR_HOST", "/host/path"), \
+         patch("main.RCE_DATA_DIR_INTERNAL", "/internal/path"), \
+         patch("os.path.exists", return_value=True), \
+         patch("os.path.getmtime", return_value=mtime), \
+         patch("builtins.open", mock_open(read_data=content)) as m:
+
+        # Execute
+        downloaded_content, downloaded_mtime = kernel_manager.download_file(session_id, filename)
+
+    # Assert
+    assert downloaded_content == content
+    assert downloaded_mtime == mtime
+    m.assert_called_once_with("/internal/path/test_session/test.txt", "rb")
+
+def test_download_file_not_found_docker(kernel_manager):
+    # Setup
+    session_id = "test_session"
+    mock_container = MagicMock()
+    kernel_manager.get_or_create_container = MagicMock(return_value=mock_container)
+    mock_container.get_archive.side_effect = Exception("Not found")
+
+    with patch("main.RCE_DATA_DIR_HOST", None):
+        with pytest.raises(HTTPException) as excinfo:
+            kernel_manager.download_file(session_id, "missing.txt")
+
+    assert excinfo.value.status_code == 404
+
+def test_download_file_not_found_volume(kernel_manager):
+    with patch("main.RCE_DATA_DIR_HOST", "/host/path"), \
+         patch("main.RCE_DATA_DIR_INTERNAL", "/internal/path"), \
+         patch("os.path.exists", return_value=False):
+
+        with pytest.raises(FileNotFoundError):
+            kernel_manager.download_file("session_id", "missing.txt")
