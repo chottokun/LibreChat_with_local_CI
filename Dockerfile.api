@@ -1,6 +1,10 @@
 # Dockerfile for the Code Interpreter API Server (FastAPI)
 FROM python:3.11-slim
 
+# Create a non-root user
+RUN groupadd -g 1000 apiuser && \
+    useradd -r -u 1000 -g apiuser apiuser
+
 WORKDIR /app
 
 # Copy dependency definitions
@@ -12,8 +16,14 @@ COPY rce_requirements.txt .
 # Install API dependencies directly
 RUN pip install --no-cache-dir fastapi[standard] uvicorn[standard] pydantic python-multipart docker
 
-# Copy application code
-COPY main.py .
+# Copy application code and set ownership
+COPY --chown=apiuser:apiuser main.py .
+
+# Create directory for shared volumes if used and set permissions
+RUN mkdir -p /app/shared_volumes/sessions && \
+    chown -R apiuser:apiuser /app
+
+USER apiuser
 
 # Expose port
 EXPOSE 8000

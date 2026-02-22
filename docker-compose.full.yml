@@ -74,15 +74,18 @@ services:
   # Override existing services to use the same network
   docker-proxy:
     networks:
-      - librechat-network
+      - rce-internal
 
   code-interpreter-api:
     networks:
       - librechat-network
+      - rce-internal
 
 networks:
   librechat-network:
     driver: bridge
+  rce-internal:
+    internal: true
 
 volumes:
   mongodb-data:
