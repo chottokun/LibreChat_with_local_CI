@@ -1,9 +1,18 @@
 FROM python:3.11-slim
 
+# Create a non-root user
+RUN groupadd -g 1000 sandboxuser && \
+    useradd -r -u 1000 -g sandboxuser sandboxuser
+
 WORKDIR /usr/src/app
 
-COPY rce_requirements.txt .
+COPY --chown=sandboxuser:sandboxuser rce_requirements.txt .
 RUN pip install --no-cache-dir -r rce_requirements.txt
+
+# Create workspace directory and set permissions
+RUN mkdir -p /mnt/data && chown sandboxuser:sandboxuser /mnt/data
+
+USER sandboxuser
 
 # Keep the container running so we can exec into it
 CMD ["tail", "-f", "/dev/null"]

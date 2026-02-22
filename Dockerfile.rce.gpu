@@ -1,6 +1,10 @@
 # Dockerfile for GPU-enabled RCE
 FROM nvidia/cuda:12.1.0-base-ubuntu22.04
 
+# Create a non-root user
+RUN groupadd -g 1000 sandboxuser && \
+    useradd -r -u 1000 -g sandboxuser sandboxuser
+
 # Install Python and dependencies
 RUN apt-get update && apt-get install -y \
     python3 \
@@ -9,8 +13,13 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /usr/src/app
 
-COPY rce_requirements.txt .
+COPY --chown=sandboxuser:sandboxuser rce_requirements.txt .
 RUN pip3 install --no-cache-dir -r rce_requirements.txt
+
+# Create workspace directory and set permissions
+RUN mkdir -p /mnt/data && chown sandboxuser:sandboxuser /mnt/data
+
+USER sandboxuser
 
 # Keep the container running
 CMD ["tail", "-f", "/dev/null"]
