@@ -719,7 +719,7 @@ async def download_session_file(
             real_filename = kernel_manager.file_id_map[s_session_id][s_filename]
     
     # Determine the file path if volume mounting is enabled
-    if RCE_DATA_DIR_INTERNAL:
+    if RCE_DATA_DIR_HOST and RCE_DATA_DIR_INTERNAL:
         session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, real_session_id)
         filepath = os.path.join(session_dir, real_filename)
         if not os.path.exists(filepath):
