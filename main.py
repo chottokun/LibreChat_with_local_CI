@@ -384,6 +384,25 @@ class KernelManager:
             return [f for f in files if f]
         return []
 
+    def _execute_in_container(self, container, code_content: str, path: str, filename: str):
+        """
+        Uploads code to the container and executes it.
+        """
+        tar_stream = io.BytesIO()
+        with tarfile.open(fileobj=tar_stream, mode='w') as tar:
+            code_bytes = code_content.encode('utf-8')
+            tar_info = tarfile.TarInfo(name=filename)
+            tar_info.size = len(code_bytes)
+            tar.addfile(tar_info, io.BytesIO(code_bytes))
+
+        container.put_archive("/mnt/data", tar_stream.getvalue())
+
+        return container.exec_run(
+            cmd=["python3", path],
+            workdir="/mnt/data",
+            demux=True
+        )
+
     def execute_code(self, session_id: str, code: str):
         """
         Executes code within the container.
@@ -403,32 +422,13 @@ class KernelManager:
             # 1. Apply code wrapping for expression-only support
             wrapped_code = wrap_code(code)
 
-            # 2. Write code to file inside container
-            def _run_with_retry(km, container, code_content, path, filename):
-                tar_stream = io.BytesIO()
-                with tarfile.open(fileobj=tar_stream, mode='w') as tar:
-                    # Injected code to ensure /mnt/data is in path
-                    # although running from there should handle it.
-                    code_bytes = code_content.encode('utf-8')
-                    tar_info = tarfile.TarInfo(name=filename)
-                    tar_info.size = len(code_bytes)
-                    tar.addfile(tar_info, io.BytesIO(code_bytes))
-                
-                container.put_archive("/mnt/data", tar_stream.getvalue())
-                
-                return container.exec_run(
-                    cmd=["python3", path],
-                    workdir="/mnt/data",
-                    demux=True
-                )
-
             try:
-                exec_result = _run_with_retry(self, container, wrapped_code, container_path, code_filename)
+                exec_result = self._execute_in_container(container, wrapped_code, container_path, code_filename)
             except (docker.errors.APIError, docker.errors.NotFound):
                 # Optimistic assumption failed: container might be stopped or gone
                 # Recovery: Force refresh and retry once
                 container = self.get_or_create_container(session_id, force_refresh=True)
-                exec_result = _run_with_retry(self, container, wrapped_code, container_path, code_filename)
+                exec_result = self._execute_in_container(container, wrapped_code, container_path, code_filename)
             
             stdout, stderr = exec_result.output
 

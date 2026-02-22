@@ -1,53 +1,10 @@
-import sys
-from unittest.mock import MagicMock, patch
-
-# --- Dependency Mocking for Unit Testing ---
-# We mock external libraries to ensure tests are fast, deterministic, and runnable
-# even if the dependencies are not installed in the local environment.
-
-# 1. Mock Docker
-mock_docker = MagicMock()
-sys.modules.setdefault("docker", mock_docker)
-
-class DockerError(Exception): pass
-class NotFound(DockerError):
-    def __init__(self, message, response=None):
-        super().__init__(message)
-        self.response = response
-mock_docker.errors.NotFound = NotFound
-
-# 2. Mock FastAPI
-mock_fastapi = MagicMock()
-class HTTPException(Exception):
-    def __init__(self, status_code, detail=None):
-        self.status_code = status_code
-        self.detail = detail
-mock_fastapi.HTTPException = HTTPException
-sys.modules.setdefault("fastapi", mock_fastapi)
-sys.modules.setdefault("fastapi.security", MagicMock())
-sys.modules.setdefault("fastapi.responses", MagicMock())
-
-# 3. Mock Pydantic
-class BaseModel:
-    def __init__(self, **kwargs):
-        for k, v in kwargs.items():
-            setattr(self, k, v)
-mock_pydantic = MagicMock()
-mock_pydantic.BaseModel = BaseModel
-sys.modules.setdefault("pydantic", mock_pydantic)
-
-# --- Test Imports ---
 import pytest
-import time
+from unittest.mock import MagicMock, patch
 import docker
 from fastapi import HTTPException
-
-# Mock docker.from_env before importing main
-mock_docker_client = MagicMock()
-mock_docker.from_env.return_value = mock_docker_client
-
 import main
 from main import KernelManager
+import time
 
 @pytest.fixture(autouse=True)
 def reset_docker_client():
@@ -102,12 +59,10 @@ def test_get_or_create_container_missing_during_reload(kernel_manager):
     # Setup
     session_id = "test_session"
     mock_container = MagicMock()
-    mock_response = MagicMock()
-    mock_response.status_code = 404
-    mock_response.reason = "Not Found"
 
-    # Use pre-defined NotFound exception
-    mock_container.reload.side_effect = NotFound("Gone", response=mock_response)
+    # Use the mock exception from conftest
+    from docker.errors import NotFound
+    mock_container.reload.side_effect = NotFound("Gone")
 
     kernel_manager.active_kernels[session_id] = {
         "container": mock_container,
