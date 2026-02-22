@@ -1,8 +1,6 @@
-import sys
 import time
 import pytest
 from unittest.mock import MagicMock, patch
-import docker
 from fastapi import HTTPException
 
 # Ensure main is imported with mocks
