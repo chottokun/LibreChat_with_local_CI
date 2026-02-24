@@ -4,6 +4,9 @@ import main
 from main import KernelManager
 from docker.errors import NotFound, APIError
 
+# Note: We don't mock sys.modules anymore to avoid breaking other tests.
+# Instead, we patch the dependencies used by KernelManager directly.
+
 def test_execute_code_cleanup_success():
     km = KernelManager()
     session_id = "test_session"
@@ -21,7 +24,7 @@ def test_execute_code_cleanup_success():
     with patch.object(km, '_execute_in_container', return_value=mock_exec_result) as mock_exec:
         # Mock uuid to have a predictable filename
         with patch('main.uuid.uuid4') as mock_uuid:
-            mock_uuid.return_value.hex = "123456"
+            mock_uuid.value.hex = "123456"
             expected_filename = "exec_123456.py"
             expected_path = f"/mnt/data/{expected_filename}"
 
