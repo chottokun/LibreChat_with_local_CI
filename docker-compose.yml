@@ -10,6 +10,17 @@ services:
       - CONTAINERS=1
       - EXEC=1
       - POST=1
+      # Explicitly disable unused features for hardening
+      - BUILD=0
+      - IMAGES=0
+      - NETWORKS=0
+      - VOLUMES=0
+      - SECRETS=0
+      - CONFIGS=0
+      - PLUGINS=0
+      - SWARM=0
+    networks:
+      - rce-internal
 
   code-interpreter-api:
     build:
@@ -32,4 +43,11 @@ services:
       - ${RCE_DATA_DIR}:/app/shared_volumes/sessions
     depends_on:
       - docker-proxy
+    networks:
+      - rce-internal
+      - default
     restart: unless-stopped
+
+networks:
+  rce-internal:
+    internal: true
