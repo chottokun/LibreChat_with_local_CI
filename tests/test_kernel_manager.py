@@ -1,5 +1,5 @@
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 # --- Dependency Mocking for Unit Testing ---
 # We mock external libraries to ensure tests are fast, deterministic, and runnable

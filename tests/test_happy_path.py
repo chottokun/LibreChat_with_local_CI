@@ -1,9 +1,6 @@
-import pytest
 from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 import main
-
-# Note: We don't mock sys.modules anymore to avoid breaking other tests.
 
 @patch('main.kernel_manager')
 def test_run_code_success(mock_kernel_manager):
