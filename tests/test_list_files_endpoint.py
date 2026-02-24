@@ -22,6 +22,7 @@ def test_list_files_success(mock_list_files):
     assert len(json_response) == 3
     assert json_response[0]["filename"] == "data.csv"
     assert "fileId" in json_response[0]
+    mock_list_files.assert_called_once_with(session_id)
 
 @patch("main.kernel_manager.list_files")
 def test_list_files_unauthorized(mock_list_files):
@@ -45,3 +46,4 @@ def test_list_files_empty(mock_list_files):
 
     assert response.status_code == 200
     assert response.json() == []
+    mock_list_files.assert_called_once_with(session_id)
