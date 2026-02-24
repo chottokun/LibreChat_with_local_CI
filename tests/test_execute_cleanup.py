@@ -42,7 +42,7 @@ def test_execute_code_cleanup_success():
                     cleanup_call = call
                     break
 
-            assert cleanup_call is not None, "Cleanup 'rm' command not found in exec_run calls"
+            assert cleanup_call is not None, f"Cleanup 'rm' command not found in exec_run calls. Expected {expected_path}"
 
 def test_execute_code_cleanup_on_failure():
     km = KernelManager()

@@ -14,8 +14,8 @@ def temp_data_dir():
 
 def test_upload_with_volume_mount(temp_data_dir):
     import main
-    with patch('main.RCE_DATA_DIR_HOST', temp_data_dir), \
-         patch('main.RCE_DATA_DIR_INTERNAL', temp_data_dir), \
+    with patch('main.RCE_DATA_DIR_INTERNAL', temp_data_dir), \
+         patch('main.RCE_DATA_DIR_HOST', temp_data_dir), \
          patch('main.DOCKER_CLIENT') as mock_docker:
 
         # Mock container run
@@ -38,7 +38,10 @@ def test_upload_with_volume_mount(temp_data_dir):
         real_session_id = main.kernel_manager.nanoid_to_session.get(session_id, session_id)
 
         # Check if file exists in host temp dir
-        expected_path = os.path.join(temp_data_dir, real_session_id, "test.txt")
+        # The code might generate a new internal UUID for the session
+        nanoid = response.json()["session_id"]
+        internal_id = main.kernel_manager.nanoid_to_session.get(nanoid, nanoid)
+        expected_path = os.path.join(temp_data_dir, internal_id, "test.txt")
         assert os.path.exists(expected_path)
         with open(expected_path, "rb") as f:
             assert f.read() == b"hello volume"
@@ -48,7 +51,7 @@ def test_upload_with_volume_mount(temp_data_dir):
         args, kwargs = mock_docker.containers.run.call_args
         assert "volumes" in kwargs
         # The internal path for binding in kwargs["volumes"] should be temp_data_dir because we patched both
-        assert kwargs["volumes"] == {os.path.join(temp_data_dir, real_session_id): {'bind': '/mnt/data', 'mode': 'rw'}}
+        assert kwargs["volumes"] == {os.path.join(temp_data_dir, internal_id): {'bind': '/mnt/data', 'mode': 'rw'}}
 
 def test_session_id_resolution_flow():
     with patch('main.kernel_manager') as mock_km:

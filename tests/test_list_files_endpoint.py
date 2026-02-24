@@ -17,10 +17,12 @@ def test_list_files_success(mock_list_files):
     )
 
     assert response.status_code == 200
+    # The API returns a list of dictionaries with filename, fileId, and id
     json_response = response.json()
     assert isinstance(json_response, list)
-    assert len(json_response) == 3
-    assert json_response[0]["filename"] == "data.csv"
+    assert len(json_response) == len(expected_files)
+    for i, f in enumerate(expected_files):
+        assert json_response[i]["filename"] == f
     assert "fileId" in json_response[0]
     mock_list_files.assert_called_once_with(session_id)
 
