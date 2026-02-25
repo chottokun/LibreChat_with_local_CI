@@ -1,24 +1,16 @@
-import sys
 import time
 import pytest
 from unittest.mock import MagicMock, patch
-import docker
 from fastapi import HTTPException
-
-# Ensure main is imported with mocks
-mock_docker_client = MagicMock()
-with patch("docker.from_env", return_value=mock_docker_client):
-    import main
-    from main import KernelManager
+import main
+from main import KernelManager
 
 @pytest.fixture(autouse=True)
 def cleanup_mocks():
-    mock_docker_client.containers.run.reset_mock()
-    mock_docker_client.containers.run.side_effect = None
-    mock_docker_client.containers.list.reset_mock()
-    mock_docker_client.containers.list.side_effect = None
-    # Reset main.DOCKER_CLIENT to our mock just in case
+    """Reset the DOCKER_CLIENT mock before each test."""
+    mock_docker_client = MagicMock()
     main.DOCKER_CLIENT = mock_docker_client
+    yield mock_docker_client
 
 @pytest.fixture
 def km():
@@ -55,8 +47,9 @@ def test_session_limit_enforcement(km):
         assert excinfo.value.status_code == 503
         assert "Server is at capacity" in excinfo.value.detail
 
-def test_container_recovery(km):
+def test_container_recovery(km, cleanup_mocks):
     # Setup
+    mock_docker_client = cleanup_mocks
     mock_container = MagicMock()
     mock_container.labels = {"session_id": "recovered_session"}
     mock_container.status = "exited"
@@ -89,8 +82,9 @@ def test_get_or_create_updates_timestamp(km):
     # Assert
     assert km.active_kernels[session_id]["last_accessed"] > initial_time
 
-def test_start_new_container_adds_labels(km):
+def test_start_new_container_adds_labels(km, cleanup_mocks):
     # Setup
+    mock_docker_client = cleanup_mocks
     session_id = "labeled_session"
     mock_docker_client.containers.run.return_value = MagicMock()
 

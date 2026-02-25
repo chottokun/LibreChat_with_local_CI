@@ -1,11 +1,6 @@
-import pytest
-from fastapi.testclient import TestClient
 from unittest.mock import MagicMock, patch
-import os
-
-# Mock docker.from_env before importing main
-with patch("docker.from_env") as mock_from_env:
-    from main import app, API_KEY
+from fastapi.testclient import TestClient
+from main import app, API_KEY
 
 client = TestClient(app)
 
