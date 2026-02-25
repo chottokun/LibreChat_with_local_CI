@@ -51,6 +51,7 @@ services:
       - LIBRECHAT_CODE_API_KEY=${LIBRECHAT_CODE_API_KEY:-your_secret_key}
       - CONFIG_BYPASS_VALIDATION=${CONFIG_BYPASS_VALIDATION:-true}
       - ALLOW_REGISTRATION=${ALLOW_REGISTRATION:-true}
+      - ENDPOINTS=${ENDPOINTS}
       - JWT_SECRET=${JWT_SECRET:-32_char_secret_key_used_for_testing_123}
       - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET:-32_char_refresh_key_used_for_testing_456}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-sk-dummy-key-for-ui-testing}
