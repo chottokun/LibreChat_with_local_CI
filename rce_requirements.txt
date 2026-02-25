@@ -2,4 +2,5 @@ pandas
 numpy
 scipy
 matplotlib
+japanize-matplotlib
 # ipykernel # Optional if we use raw python, but good to have for future
