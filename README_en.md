@@ -60,12 +60,19 @@ LibreChat will be available at **http://localhost:3080**.
 
 ### 4. Connect Local Models (Optional: Ollama)
 
-If you have Ollama running as a separate Docker container and want to use it with LibreChat:
+There are two ways to integrate Ollama for local model support:
 
+#### Method A: Start a New Ollama Container (Recommended)
+Uncomment the `ollama` service section in `docker-compose.full.yml`:
+1. Remove the `#` comments from the `ollama:` service in `docker-compose.full.yml`.
+2. Run `docker compose -f docker-compose.yml -f docker-compose.full.yml up -d`.
+
+#### Method B: Use an Existing Ollama Container
+If you already have Ollama running in a separate container, connect it to the LibreChat network:
 ```bash
 docker network connect librechat-network ollama
 ```
-*(Ensure your `.env` contains the correct `OLLAMA_BASE_URL`)*
+*(Ensure your `.env` has `OLLAMA_BASE_URL` set to `http://ollama:11434`)*
 
 ---
 
