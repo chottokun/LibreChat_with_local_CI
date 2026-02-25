@@ -13,7 +13,6 @@ def temp_data_dir():
     shutil.rmtree(d)
 
 def test_upload_with_volume_mount(temp_data_dir):
-    import main
     with patch('main.RCE_DATA_DIR_INTERNAL', temp_data_dir), \
          patch('main.RCE_DATA_DIR_HOST', temp_data_dir), \
          patch('main.DOCKER_CLIENT') as mock_docker:
@@ -59,12 +58,6 @@ def test_session_id_resolution_flow():
         mock_km.nanoid_to_session = {}
         mock_km.session_to_nanoid = {}
         mock_km.lock = MagicMock()
-
-        # We need to mock the actual methods of kernel_manager because they are called by endpoints
-        # But wait, main.kernel_manager IS the instance.
-
-        # Instead of mocking the whole kernel_manager, let's mock only what we need
-        # and let the real resolve_session_id run if possible, or mock it too.
 
         real_km = main.KernelManager()
         with patch('main.kernel_manager', real_km), \
