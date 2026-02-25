@@ -11,7 +11,7 @@ fileConfig:
 
 endpoints:
   custom:
-    - name: "SakuraAI"
+    - name: "Open AI Compatible"
       apiKey: "${EXTERNAL_API_KEY}"
       baseURL: "${EXTERNAL_API_URL}"
       models:
@@ -19,4 +19,4 @@ endpoints:
         fetch: true
       titleConvo: true
       summarize: true
-      modelDisplayLabel: "Sakura Model"
+      modelDisplayLabel: "Open AI Compatible"
