@@ -40,7 +40,7 @@ services:
       - RCE_DATA_DIR_HOST=${RCE_DATA_DIR}
       - RCE_DATA_DIR_INTERNAL=/app/shared_volumes/sessions
     volumes:
-      - ${RCE_DATA_DIR}:/app/shared_volumes/sessions
+      - ${RCE_DATA_DIR:-./sessions}:/app/shared_volumes/sessions
     depends_on:
       - docker-proxy
     networks:

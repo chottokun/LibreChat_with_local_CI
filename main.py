@@ -26,9 +26,35 @@ logger = logging.getLogger(__name__)
 # Configuration
 API_KEY = os.environ.get("LIBRECHAT_CODE_API_KEY", "your_secret_key")
 # RCE_DATA_DIR_HOST is the path on the Docker Host (used for mounting)
-RCE_DATA_DIR_HOST = os.environ.get("RCE_DATA_DIR_HOST", os.environ.get("RCE_DATA_DIR"))
+_raw_data_dir = os.environ.get("RCE_DATA_DIR_HOST", os.environ.get("RCE_DATA_DIR", ""))
 # RCE_DATA_DIR_INTERNAL is the path inside this API container (used for writing files)
 RCE_DATA_DIR_INTERNAL = os.environ.get("RCE_DATA_DIR_INTERNAL", "/app/shared_volumes/sessions")
+
+# 1. Validation for RCE_DATA_DIR
+if not _raw_data_dir or "absolute/path/to/your/project/sessions" in _raw_data_dir:
+    # Use default mode (put_archive) if path is not set or is the placeholder
+    RCE_DATA_DIR_HOST = None
+    if _raw_data_dir:
+        logger.info("RCE_DATA_DIR is set to placeholder. Using default 'put_archive' mode.")
+else:
+    RCE_DATA_DIR_HOST = _raw_data_dir
+
+# 2. Writability check for shared volume
+if RCE_DATA_DIR_HOST:
+    try:
+        os.makedirs(RCE_DATA_DIR_INTERNAL, exist_ok=True)
+        if not os.access(RCE_DATA_DIR_INTERNAL, os.W_OK):
+            logger.warning("!!! PERMISSION ERROR !!!")
+            logger.warning(f"RCE_DATA_DIR is set to '{RCE_DATA_DIR_HOST}', but the internal path '{RCE_DATA_DIR_INTERNAL}' is not writable.")
+            logger.warning("Falling back to 'put_archive' mode (slower, but works without host mounting).")
+            logger.warning("To fix this, ensure the host directory has correct permissions (e.g., sudo chown -R 1000:1000 <dir>)")
+            RCE_DATA_DIR_HOST = None
+        else:
+            logger.info(f"Volume mounting enabled: {RCE_DATA_DIR_HOST} -> {RCE_DATA_DIR_INTERNAL}")
+    except Exception as e:
+        logger.warning(f"Failed to initialize shared volume: {e}. Falling back to 'put_archive' mode.")
+        RCE_DATA_DIR_HOST = None
+
 RCE_SESSION_TTL = int(os.environ.get("RCE_SESSION_TTL", "3600"))
 RCE_MAX_SESSIONS = int(os.environ.get("RCE_MAX_SESSIONS", "100"))
 RCE_MANAGED_BY_VALUE = "librechat-rce"
@@ -727,7 +753,7 @@ async def download_session_file(
             real_filename = kernel_manager.file_id_map[s_session_id][s_filename]
     
     # Determine the file path if volume mounting is enabled
-    if RCE_DATA_DIR_INTERNAL:
+    if RCE_DATA_DIR_HOST:
         session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, real_session_id)
         filepath = os.path.join(session_dir, real_filename)
         if not os.path.exists(filepath):
