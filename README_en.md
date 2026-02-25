@@ -34,7 +34,11 @@ Copy the template map to configure your environment:
 ```bash
 cp .env.librechat .env
 ```
-Edit `.env` with your actual secrets (`JWT_SECRET`, `CREDS_KEY`, `LIBRECHAT_CODE_API_KEY`, etc.).
+
+Make sure to update the following **Required Settings** in your `.env` for security:
+- **`JWT_SECRET` / `JWT_REFRESH_SECRET`**: Random strings for JWT authentication.
+- **`CREDS_KEY` / `CREDS_IV`**: Keys for encrypting credentials.
+- **`LIBRECHAT_CODE_API_KEY`**: A shared secret key between LibreChat and this API.
 
 ### 2. Build the Sandbox Image
 
@@ -124,21 +128,36 @@ All settings are controlled via environment variables in the `.env` file:
 | `RCE_GPU_ENABLED` | `false` | Enable GPU passthrough to the sandbox |
 | `RCE_DATA_DIR` | (None) | Host path for session data persistence (must be mounted, see below) |
 
-### 📁 File Persistence & Volume Mounting
+### 📁 File Persistence & Storage Modes
 
-To ensure uploaded files and execution outputs are preserved, you must correctly mount a host directory to the API container and set corresponding environment variables:
+This API supports two modes for handling file uploads and generated data.
 
-1. **`.env`**:
+#### 1. Standard Mode (Default: `put_archive`)
+This mode is active when `RCE_DATA_DIR` is not set (or commented out) in your `.env`.
+- **Pros**: Works "out of the box" without extra configuration or permission headaches.
+- **Cons**: Slightly slower for very large files.
+- **How it works**: Files are streamed directly into containers via the Docker API.
+
+#### 2. High Performance Mode (Advanced: Volume Mounting)
+Uses host directory mounting for persistence and faster file access. Recommended for heavy data analysis.
+
+**Setup Steps:**
+1. **Create Directory**: Create a directory on your host machine.
+   ```bash
+   mkdir -p sessions
+   ```
+2. **Set Permissions**: Ensure the API container (UID 1000) has write access. **Required on Linux.**
+   ```bash
+   sudo chown -R 1000:1000 sessions
+   ```
+3. **Configure `.env`**: Set the **absolute path** to your directory.
    ```dotenv
-   RCE_DATA_DIR=/absolute/path/to/your/sessions
+   RCE_DATA_DIR=/home/user/Project/sessions
    ```
-2. **`docker-compose.yml`**:
-   ```yaml
-   volumes:
-     - ${RCE_DATA_DIR}:/app/shared_volumes/sessions
-   ```
+4. **Restart**: Run `docker compose up -d` to apply.
 
-This setup ensures that the API's `/app/shared_volumes/sessions` directory is synchronized with your host machine, allowing files to be safely passed to the sandbox's `/mnt/data` directory.
+> [!TIP]
+> If there is a permission error or invalid path in Volume mode, the API will automatically fall back to **Standard Mode**, ensuring your chat remains functional.
 
 ---
 
