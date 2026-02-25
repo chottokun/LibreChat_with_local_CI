@@ -60,12 +60,19 @@ LibreChatは **http://localhost:3080** で利用可能になります。
 
 ### 4. ローカルモデルの接続 (オプション: Ollama)
 
-Ollamaを別のDockerコンテナとして稼働させており、LibreChatと連携させたい場合：
+Ollamaをローカルで稼働させて連携させたい場合、以下の2つの方法があります：
 
+#### A. 新しくOllamaコンテナを起動する場合 (推奨)
+`docker-compose.full.yml` 内の `ollama` セクションのコメントアウトを解除して起動します：
+1. `docker-compose.full.yml` の `ollama:` サービス部分のコメントを外す。
+2. `docker compose -f docker-compose.yml -f docker-compose.full.yml up -d` を再実行。
+
+#### B. すでに別でOllamaコンテナを稼働させている場合
+既存のOllamaコンテナをLibreChatのネットワークに接続します：
 ```bash
 docker network connect librechat-network ollama
 ```
-*(`.env` の `OLLAMA_BASE_URL` が正しく設定されていることを確認してください)*
+*(`.env` の `OLLAMA_BASE_URL` が `http://ollama:11434` に設定されていることを確認してください)*
 
 ---
 
