@@ -1,48 +1,6 @@
-import sys
-from unittest.mock import MagicMock
-
-# Define common exception classes for Docker
-class MockDockerError(Exception): pass
-class MockAPIError(MockDockerError): pass
-class MockNotFound(MockDockerError):
-    def __init__(self, message, response=None):
-        super().__init__(message)
-        self.response = response
-
-# Mock docker module
-mock_docker = MagicMock()
-mock_docker.errors.APIError = MockAPIError
-mock_docker.errors.NotFound = MockNotFound
-
-# Mock docker.errors sub-module
-mock_errors = MagicMock()
-mock_errors.APIError = MockAPIError
-mock_errors.NotFound = MockNotFound
-
-sys.modules["docker"] = mock_docker
-sys.modules["docker.errors"] = mock_errors
-
-# Define common exception classes for FastAPI
-class MockHTTPException(Exception):
-    def __init__(self, status_code, detail=None):
-        self.status_code = status_code
-        self.detail = detail
-
-# Mock fastapi
-mock_fastapi = MagicMock()
-mock_fastapi.HTTPException = MockHTTPException
-sys.modules["fastapi"] = mock_fastapi
-sys.modules["fastapi.security"] = MagicMock()
-sys.modules["fastapi.responses"] = MagicMock()
-
-# Mock pydantic
-class MockBaseModel:
-    def __init__(self, **kwargs):
-        for k, v in kwargs.items():
-            setattr(self, k, v)
-    def dict(self):
-        return self.__dict__
-
-mock_pydantic = MagicMock()
-mock_pydantic.BaseModel = MockBaseModel
-sys.modules["pydantic"] = mock_pydantic
+# conftest.py - Shared test fixtures
+# No sys.modules mocking here. Each test file should use its own mocking strategy
+# to avoid cross-test pollution.
+#
+# Files that test KernelManager internals use unittest.mock.patch for main.DOCKER_CLIENT
+# Files that use FastAPI TestClient import real docker and main modules

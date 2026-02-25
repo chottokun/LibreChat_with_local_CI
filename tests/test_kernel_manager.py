@@ -1,61 +1,21 @@
-import sys
-from unittest.mock import MagicMock
-
-# --- Dependency Mocking for Unit Testing ---
-# We mock external libraries to ensure tests are fast, deterministic, and runnable
-# even if the dependencies are not installed in the local environment.
-
-# 1. Mock Docker
-mock_docker = MagicMock()
-sys.modules.setdefault("docker", mock_docker)
-
-class DockerError(Exception): pass
-class NotFound(DockerError):
-    def __init__(self, message, response=None):
-        super().__init__(message)
-        self.response = response
-mock_docker.errors.NotFound = NotFound
-
-# 2. Mock FastAPI
-mock_fastapi = MagicMock()
-class HTTPException(Exception):
-    def __init__(self, status_code, detail=None):
-        self.status_code = status_code
-        self.detail = detail
-mock_fastapi.HTTPException = HTTPException
-sys.modules.setdefault("fastapi", mock_fastapi)
-sys.modules.setdefault("fastapi.security", MagicMock())
-sys.modules.setdefault("fastapi.responses", MagicMock())
-
-# 3. Mock Pydantic
-class BaseModel:
-    def __init__(self, **kwargs):
-        for k, v in kwargs.items():
-            setattr(self, k, v)
-mock_pydantic = MagicMock()
-mock_pydantic.BaseModel = BaseModel
-sys.modules.setdefault("pydantic", mock_pydantic)
-
-# --- Test Imports ---
 import pytest
-from unittest.mock import MagicMock, patch
-import docker
+import time
 import io
 import tarfile
+from unittest.mock import MagicMock, patch
+from docker.errors import NotFound
 from fastapi import HTTPException
 import main
 from main import KernelManager
-import time
 
 @pytest.fixture(autouse=True)
-def reset_docker_client():
-    main.DOCKER_CLIENT.containers.get.reset_mock()
-    main.DOCKER_CLIENT.containers.run.reset_mock()
-    main.DOCKER_CLIENT.containers.list.reset_mock()
-    main.DOCKER_CLIENT.containers.get.side_effect = None
-    main.DOCKER_CLIENT.containers.list.side_effect = None
-    main.DOCKER_CLIENT.containers.get.return_value = MagicMock()
-    main.DOCKER_CLIENT.containers.list.return_value = []
+def mock_docker_client():
+    """Replace main.DOCKER_CLIENT with a MagicMock for each test."""
+    mock_client = MagicMock()
+    original = main.DOCKER_CLIENT
+    main.DOCKER_CLIENT = mock_client
+    yield mock_client
+    main.DOCKER_CLIENT = original
 
 @pytest.fixture
 def kernel_manager():
@@ -104,8 +64,7 @@ def test_get_or_create_container_missing_during_reload(kernel_manager):
     session_id = "test_session"
     mock_container = MagicMock()
 
-    # Use the mock exception from conftest
-    from docker.errors import NotFound
+    # Use the real docker.errors.NotFound
     mock_container.reload.side_effect = NotFound("Gone")
 
     kernel_manager.active_kernels[session_id] = {
@@ -295,6 +254,7 @@ def test_recover_containers_skips(kernel_manager):
         # Should not have called logger.info with "Recovered"
         recovered_calls = [call for call in mock_logger.info.call_args_list if "Recovered session" in call.args[0]]
         assert len(recovered_calls) == 0
+
 def test_download_file_invalid_filename(kernel_manager):
     with pytest.raises(HTTPException) as excinfo:
         kernel_manager.download_file("session_id", "")

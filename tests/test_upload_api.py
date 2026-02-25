@@ -4,9 +4,7 @@ from unittest.mock import MagicMock, patch
 import os
 import io
 
-# Mock docker.from_env before importing main
-with patch("docker.from_env") as mock_from_env:
-    from main import app, API_KEY, kernel_manager
+from main import app, API_KEY, kernel_manager
 
 client = TestClient(app)
 

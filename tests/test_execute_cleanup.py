@@ -4,8 +4,8 @@ import main
 from main import KernelManager
 from docker.errors import NotFound, APIError
 
-# Note: We don't mock sys.modules anymore to avoid breaking other tests.
-# Instead, we patch the dependencies used by KernelManager directly.
+# Note: We use real docker.errors exceptions to ensure compatibility
+# with the except clause in main.py's execute_code method.
 
 def test_execute_code_cleanup_success():
     km = KernelManager()
