@@ -9,7 +9,7 @@ import time
 import asyncio
 import string
 import secrets
-from fastapi import FastAPI, HTTPException, Security, UploadFile, File, Form, Query, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Security, UploadFile, File, Form, Query, BackgroundTasks, Request
 from fastapi.security import APIKeyHeader
 from fastapi.responses import FileResponse
 import mimetypes
@@ -267,7 +267,7 @@ class KernelManager:
                 "last_accessed": time.time()
             }
             return container
-        except Exception as e:
+        except Exception:
             logger.exception("Failed to start sandbox for session %s", session_id)
             raise HTTPException(status_code=500, detail="Failed to start sandbox. Please contact an administrator.")
 
@@ -410,6 +410,25 @@ class KernelManager:
             return [f for f in files if f]
         return []
 
+    def _execute_in_container(self, container, code_content: str, path: str, filename: str):
+        """
+        Uploads code to the container and executes it.
+        """
+        tar_stream = io.BytesIO()
+        with tarfile.open(fileobj=tar_stream, mode='w') as tar:
+            code_bytes = code_content.encode('utf-8')
+            tar_info = tarfile.TarInfo(name=filename)
+            tar_info.size = len(code_bytes)
+            tar.addfile(tar_info, io.BytesIO(code_bytes))
+
+        container.put_archive("/mnt/data", tar_stream.getvalue())
+
+        return container.exec_run(
+            cmd=["python3", path],
+            workdir="/mnt/data",
+            demux=True
+        )
+
     def execute_code(self, session_id: str, code: str):
         """
         Executes code within the container.
@@ -429,32 +448,13 @@ class KernelManager:
             # 1. Apply code wrapping for expression-only support
             wrapped_code = wrap_code(code)
 
-            # 2. Write code to file inside container
-            def _run_with_retry(km, container, code_content, path, filename):
-                tar_stream = io.BytesIO()
-                with tarfile.open(fileobj=tar_stream, mode='w') as tar:
-                    # Injected code to ensure /mnt/data is in path
-                    # although running from there should handle it.
-                    code_bytes = code_content.encode('utf-8')
-                    tar_info = tarfile.TarInfo(name=filename)
-                    tar_info.size = len(code_bytes)
-                    tar.addfile(tar_info, io.BytesIO(code_bytes))
-                
-                container.put_archive("/mnt/data", tar_stream.getvalue())
-                
-                return container.exec_run(
-                    cmd=["python3", path],
-                    workdir="/mnt/data",
-                    demux=True
-                )
-
             try:
-                exec_result = _run_with_retry(self, container, wrapped_code, container_path, code_filename)
+                exec_result = self._execute_in_container(container, wrapped_code, container_path, code_filename)
             except (docker.errors.APIError, docker.errors.NotFound):
                 # Optimistic assumption failed: container might be stopped or gone
                 # Recovery: Force refresh and retry once
                 container = self.get_or_create_container(session_id, force_refresh=True)
-                exec_result = _run_with_retry(self, container, wrapped_code, container_path, code_filename)
+                exec_result = self._execute_in_container(container, wrapped_code, container_path, code_filename)
             
             stdout, stderr = exec_result.output
 
@@ -466,14 +466,14 @@ class KernelManager:
             
         except HTTPException:
             raise
-        except Exception as e:
+        except Exception:
             logger.exception("Error executing code in session %s", session_id)
             raise HTTPException(status_code=500, detail="An internal error occurred during code execution.")
         finally:
             # 3. Cleanup: remove the temporary file
             try:
                 container.exec_run(cmd=["rm", container_path])
-            except:
+            except Exception:
                 pass
 
 kernel_manager = KernelManager()
@@ -595,50 +595,42 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
         "images": [] # Placeholder for future image capture implementation
     }
 
-from fastapi import Request
-
 @app.post("/upload")
 async def upload_files(
-    request: Request,
+    entity_id: Optional[str] = Form(None),
+    session_id: Optional[str] = Form(None),
+    files: Optional[List[UploadFile]] = File(None),
+    file: Optional[List[UploadFile]] = File(None),
+    session_id_query: Optional[str] = Query(None, alias="session_id"),
     key: str = Security(get_api_key)
 ):
     """
     Uploads files to a specific session sandbox.
     """
     try:
-        form = await request.form()
-        # Log everything for debugging
-        logger.info("Upload request received. Form fields: %s", list(form.keys()))
-        
-        # Support both 'entity_id' (LibreChat default) and 'session_id'
-        sid = form.get("entity_id") or form.get("session_id") or request.query_params.get("session_id")
+        # Support both 'entity_id' (LibreChat default) and 'session_id' (form or query)
+        sid = entity_id or session_id or session_id_query
         if not sid:
             # If no session ID is provided, we generate one.
             sid = generate_nanoid()
             logger.info("No session ID provided in upload. Generated new one: %s", sid)
 
         # Handle 'files' or 'file' field
-        files = form.getlist("files") or form.getlist("file")
-        if not files:
-            logger.error("No files found in form. Fields: %s", list(form.keys()))
+        upload_list = files or file
+        if not upload_list:
+            logger.error("No files provided in upload request")
             raise HTTPException(status_code=422, detail="No files provided")
 
-        logger.info("Files found in request: %s (Types: %s)", files, [type(f) for f in files])
+        logger.info("Files found in request: %s", [f.filename for f in upload_list])
 
         # Resolve nanoid session ID if provided
-        # If the provided sid looks like a nanoid, we should probably treat it as such.
-        # But we must be careful not to use it as the internal UUID directly if we want isolation.
-        # However, for LibreChat consistency, if it sends an ID, we should use that as our 'nanoid_session' handle.
         real_session_id = kernel_manager.resolve_session_id(sanitize_id(sid))
 
         # Get or create nanoid session ID for response
         with kernel_manager.lock:
             if real_session_id == sid:
                 # This was a new ID provided by LibreChat or generated by us.
-                # If it's not already in our maps, let's use it as the nanoid handle.
                 if sid not in kernel_manager.nanoid_to_session:
-                    # For consistency, we can use the same SID as the internal ID IF it's safe.
-                    # Or we generation a UUID and map it. Let's use it as the map key.
                     internal_uuid = str(uuid.uuid4())
                     kernel_manager.nanoid_to_session[sid] = internal_uuid
                     kernel_manager.session_to_nanoid[internal_uuid] = sid
@@ -650,13 +642,9 @@ async def upload_files(
             nanoid_session = kernel_manager.session_to_nanoid.get(real_session_id, sid)
 
         uploaded_files = []
-        for file in files:
-            # Check if it's a starlette.datastructures.UploadFile
-            if not hasattr(file, "filename") or not hasattr(file, "read"):
-                logger.warning("Skipping file-like object that lacks required attributes: %s", type(file))
-                continue
-            content = await file.read()
-            kernel_manager.upload_file(real_session_id, file.filename, content)
+        for f in upload_list:
+            content = await f.read()
+            kernel_manager.upload_file(real_session_id, f.filename, content)
 
             # Ensure file mapping exists
             with kernel_manager.lock:
@@ -664,21 +652,21 @@ async def upload_files(
                     kernel_manager.file_id_map[nanoid_session] = {}
 
                 existing_ids = {v: k for k, v in kernel_manager.file_id_map[nanoid_session].items()}
-                if file.filename in existing_ids:
-                    file_id = existing_ids[file.filename]
+                if f.filename in existing_ids:
+                    file_id = existing_ids[f.filename]
                 else:
                     file_id = generate_nanoid()
-                    kernel_manager.file_id_map[nanoid_session][file_id] = file.filename
+                    kernel_manager.file_id_map[nanoid_session][file_id] = f.filename
 
-            uploaded_files.append({"fileId": file_id, "filename": file.filename})
+            uploaded_files.append({"fileId": file_id, "filename": f.filename})
         
-        # Standardize response structure: LibreChat might expect these at root if singular
+        # Standardize response structure
         res = {
             "message": "success",
             "session_id": nanoid_session,
             "files": uploaded_files
         }
-        # Flatten the first file for root-level access
+        # Flatten the first file for root-level access (LibreChat compatibility)
         if uploaded_files:
             res.update(uploaded_files[0])
             

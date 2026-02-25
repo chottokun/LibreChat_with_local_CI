@@ -1,8 +1,3 @@
-import sys
-from unittest.mock import MagicMock, patch
-
-# Mock docker before importing main
-sys.modules['docker'] = MagicMock()
 import main
 
 def test_wrap_code_expression():
