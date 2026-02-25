@@ -1,5 +1,5 @@
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 # --- Dependency Mocking for Unit Testing ---
 # We mock external libraries to ensure tests are fast, deterministic, and runnable
@@ -38,16 +38,14 @@ sys.modules.setdefault("pydantic", mock_pydantic)
 
 # --- Test Imports ---
 import pytest
-import time
+from unittest.mock import MagicMock, patch
 import docker
+import io
+import tarfile
 from fastapi import HTTPException
-
-# Mock docker.from_env before importing main
-mock_docker_client = MagicMock()
-mock_docker.from_env.return_value = mock_docker_client
-
 import main
 from main import KernelManager
+import time
 
 @pytest.fixture(autouse=True)
 def reset_docker_client():
@@ -105,12 +103,10 @@ def test_get_or_create_container_missing_during_reload(kernel_manager):
     # Setup
     session_id = "test_session"
     mock_container = MagicMock()
-    mock_response = MagicMock()
-    mock_response.status_code = 404
-    mock_response.reason = "Not Found"
 
-    # Use pre-defined NotFound exception
-    mock_container.reload.side_effect = NotFound("Gone", response=mock_response)
+    # Use the mock exception from conftest
+    from docker.errors import NotFound
+    mock_container.reload.side_effect = NotFound("Gone")
 
     kernel_manager.active_kernels[session_id] = {
         "container": mock_container,
@@ -299,3 +295,79 @@ def test_recover_containers_skips(kernel_manager):
         # Should not have called logger.info with "Recovered"
         recovered_calls = [call for call in mock_logger.info.call_args_list if "Recovered session" in call.args[0]]
         assert len(recovered_calls) == 0
+def test_download_file_invalid_filename(kernel_manager):
+    with pytest.raises(HTTPException) as excinfo:
+        kernel_manager.download_file("session_id", "")
+    assert excinfo.value.status_code == 400
+
+def test_download_file_volume_success(kernel_manager):
+    with patch("main.RCE_DATA_DIR_HOST", "/host/path"), \
+         patch("main.RCE_DATA_DIR_INTERNAL", "/internal/path"), \
+         patch("os.path.exists", return_value=True), \
+         patch("os.path.getmtime", return_value=123456789.0), \
+         patch("builtins.open", MagicMock(return_value=MagicMock(__enter__=MagicMock(return_value=MagicMock(read=MagicMock(return_value=b"content")))))):
+
+        content, mtime = kernel_manager.download_file("test_session", "test.txt")
+        assert content == b"content"
+        assert mtime == 123456789.0
+
+def test_download_file_volume_not_found(kernel_manager):
+    with patch("main.RCE_DATA_DIR_HOST", "/host/path"), \
+         patch("main.RCE_DATA_DIR_INTERNAL", "/internal/path"), \
+         patch("os.path.exists", return_value=False):
+
+        with pytest.raises(FileNotFoundError):
+            kernel_manager.download_file("test_session", "test.txt")
+
+def test_download_file_docker_success(kernel_manager):
+    session_id = "test_session"
+    filename = "test.txt"
+    mock_container = MagicMock()
+    kernel_manager.get_or_create_container = MagicMock(return_value=mock_container)
+
+    # Create a real tar stream for robustness
+    tar_stream = io.BytesIO()
+    content = b"docker_content"
+    with tarfile.open(fileobj=tar_stream, mode='w') as tar:
+        tar_info = tarfile.TarInfo(name=filename)
+        tar_info.size = len(content)
+        tar.addfile(tar_info, io.BytesIO(content))
+
+    # get_archive returns a generator of chunks (iterable) and a stat dict
+    mock_container.get_archive.return_value = ([tar_stream.getvalue()], {"mtime": 987654321.0})
+
+    with patch("main.RCE_DATA_DIR_HOST", None):
+        res_content, mtime = kernel_manager.download_file(session_id, filename)
+        assert res_content == content
+        assert mtime == 987654321.0
+
+def test_download_file_docker_not_found(kernel_manager):
+    session_id = "test_session"
+    filename = "test.txt"
+    mock_container = MagicMock()
+    kernel_manager.get_or_create_container = MagicMock(return_value=mock_container)
+
+    mock_container.get_archive.side_effect = Exception("Docker error")
+
+    with patch("main.RCE_DATA_DIR_HOST", None):
+        with pytest.raises(HTTPException) as excinfo:
+            kernel_manager.download_file(session_id, filename)
+        assert excinfo.value.status_code == 404
+
+def test_download_file_docker_empty_tar(kernel_manager):
+    session_id = "test_session"
+    filename = "test.txt"
+    mock_container = MagicMock()
+    kernel_manager.get_or_create_container = MagicMock(return_value=mock_container)
+
+    # Empty tar
+    tar_stream = io.BytesIO()
+    with tarfile.open(fileobj=tar_stream, mode='w') as tar:
+        pass
+
+    mock_container.get_archive.return_value = ([tar_stream.getvalue()], {"mtime": 0})
+
+    with patch("main.RCE_DATA_DIR_HOST", None):
+        with pytest.raises(HTTPException) as excinfo:
+            kernel_manager.download_file(session_id, filename)
+        assert excinfo.value.status_code == 404

@@ -1,8 +1,6 @@
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from fastapi.testclient import TestClient
 import main
-import os
 
 def test_sanitize_id():
     from main import sanitize_id
@@ -32,6 +30,8 @@ def test_path_traversal_blocked_upload():
         mock_km.resolve_session_id.assert_called_with("malicious")
 
 def test_path_traversal_blocked_download():
+    # We patch RCE_DATA_DIR_INTERNAL to None to force the Docker fallback logic
+    # which uses kernel_manager.download_file mock.
     with patch('main.kernel_manager') as mock_km, \
          patch('main.RCE_DATA_DIR_INTERNAL', None):
         mock_km.nanoid_to_session = {}
