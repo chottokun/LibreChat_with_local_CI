@@ -538,7 +538,11 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
             effective_session_id = first_file.session_id
         elif isinstance(first_file, dict) and "session_id" in first_file:
             effective_session_id = first_file["session_id"]
-            
+
+    # Fallback to user_id to ensure container reuse and improve performance
+    if not effective_session_id and req.user_id:
+        effective_session_id = f"user_{req.user_id}"
+        
     logger.info("Effective session ID for exec: %s", effective_session_id)
 
     # Resolve nanoid session ID if provided
