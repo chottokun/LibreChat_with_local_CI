@@ -7,6 +7,9 @@ RUN groupadd -g 1000 sandboxuser && \
 WORKDIR /usr/src/app
 
 COPY --chown=sandboxuser:sandboxuser rce_requirements.txt .
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    fonts-ipafont-gothic \
+    && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir -r rce_requirements.txt
 
 # Create workspace directory and set permissions
