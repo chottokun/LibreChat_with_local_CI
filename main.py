@@ -14,6 +14,7 @@ from fastapi.security import APIKeyHeader
 from fastapi.responses import FileResponse
 import mimetypes
 import tempfile
+from urllib.parse import quote
 from pydantic import BaseModel, ConfigDict
 from typing import List, Optional, Dict, Any
 import shutil
@@ -403,8 +404,11 @@ class KernelManager:
 
     def list_files(self, session_id: str):
         container = self.get_or_create_container(session_id)
-        # We list files and their sizes/mtimes if possible, or just names for now
-        res = container.exec_run(cmd=["ls", "-1", "/mnt/data"])
+        # Use python to list files to avoid locale-dependent 'ls' formatting/escaping issues.
+        # This ensures we get raw UTF-8 filenames correctly.
+        res = container.exec_run(
+            cmd=["python3", "-c", "import os; print('\\n'.join(os.listdir('/mnt/data')))"]
+        )
         if res.exit_code == 0:
             files = res.output.decode('utf-8').splitlines()
             return [f for f in files if f]
@@ -773,11 +777,19 @@ async def download_session_file(
     if cleanup_needed:
         background_tasks.add_task(os.remove, tmp_filepath)
 
+    # Manually construct Content-Disposition header to ensure maximum compatibility with Japanese filenames.
+    # Starlette's default FileResponse might not always provide the filename="..." fallback correctly for non-ASCII.
+    filename_encoded = quote(real_filename)
+    # Fallback to an ASCII-safe filename or 'file' if no ASCII characters exist.
+    safe_filename_ascii = real_filename.encode('ascii', 'ignore').decode() or "file"
+    headers = {
+        "Content-Disposition": f"{disposition}; filename=\"{safe_filename_ascii}\"; filename*=utf-8''{filename_encoded}"
+    }
+
     return FileResponse(
         path=tmp_filepath,
-        filename=os.path.basename(real_filename),
         media_type=mime_type,
-        content_disposition_type=disposition
+        headers=headers
     )
 
 @app.get("/health")
