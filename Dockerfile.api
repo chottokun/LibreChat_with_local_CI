@@ -1,6 +1,11 @@
 # Dockerfile for the Code Interpreter API Server (FastAPI)
 FROM python:3.11-slim
 
+# Set UTF-8 locale for Japanese filename support
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+ENV PYTHONUTF8=1
+
 # Create a non-root user
 RUN groupadd -g 1000 apiuser && \
     useradd -r -u 1000 -g apiuser apiuser
