@@ -781,7 +781,7 @@ async def download_session_file(
     # Starlette's default FileResponse might not always provide the filename="..." fallback correctly for non-ASCII.
     filename_encoded = quote(real_filename)
     # Fallback to an ASCII-safe filename or 'file' if no ASCII characters exist.
-    safe_filename_ascii = real_filename.encode('ascii', 'ignore').decode() or "file"
+    safe_filename_ascii = real_filename.encode('ascii', 'ignore').decode().replace('"', '').replace('\r', '').replace('\n', '') or "file"
     headers = {
         "Content-Disposition": f"{disposition}; filename=\"{safe_filename_ascii}\"; filename*=utf-8''{filename_encoded}"
     }
