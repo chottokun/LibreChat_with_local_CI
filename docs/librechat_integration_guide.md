@@ -57,48 +57,14 @@ To make files appear as native, clickable attachment icons in the chat UI, your 
 }
 ```
 
-## 4. Debugging the "Network Error" on File Downloads
+## 4. Troubleshooting and Best Practices
 
-Even if you follow the above rules perfectly, you might encounter a persistent issue where clicking the attachment icon results in a LibreChat popup saying "Something went wrong" (or "Network Error"), and the file downloads with a raw 36-character UUID filename instead of the actual filename.
+### File Download Behavior
+- **Streaming Reliability**: Ensure your API uses `FileResponse` (in FastAPI) or equivalent to provide proper HTTP/1.1 stream headers (`Content-Length`, `Accept-Ranges`). This prevents "Network Error" popups in the UI during heavy downloads.
+- **Filename Sanitization**: LibreChat may sanitize filenames containing non-ASCII characters. Recent fixes in our custom API handle `Content-Disposition` labels correctly to restore the original filenames where possible (see `docs/librechat_japanese_filename_bug.md`).
 
-This is caused by a cascade of two distinct issues that must both be resolved:
-
-### Issue A: Axios Stream Instability (Backend)
-LibreChat's backend uses `axios` with `responseType: 'stream'` to pipe the file download from your custom API directly to the user's browser. If your API returns the file bytes using a simple HTTP response without proper chunking and Content-Length headers, the Axios stream will fail to pipe efficiently.
-
-**The Fix:** If using FastAPI, do not manually chunk bytes or return static `Response` objects. Extract your file to a temporary disk location and return it using a native `FileResponse`. This guarantees perfect HTTP/1.1 stream headers (Content-Length, Accept-Ranges) that Axios requires.
-
-```python
-from fastapi.responses import FileResponse
-import os
-
-@app.get("/download/{session_id}/{filename}")
-async def download_file(session_id: str, filename: str):
-    # Extract from docker, save to /tmp
-    tmp_path = f"/tmp/{session_id}_{filename}"
-    # ... extraction logic ...
-    
-    # Let FastAPI handle all the complex streaming headers automatically
-    return FileResponse(path=tmp_path, filename=filename)
-```
-
-### Issue B: Blob URL Race Condition (Frontend)
-LibreChat's React frontend receives the file stream as a `Blob`, generates a temporary `blob:http://` URL, assigns it to a hidden `<a>` tag, clicks it, and then instantly revokes the URL.
-
-```javascript
-// Inside LibreChat's LogLink.tsx / Citation.tsx
-link.href = stream.data; // e.g. blob:http://localhost:3080/41db7091-3d22...
-link.click();
-window.URL.revokeObjectURL(stream.data); // The bug!
-```
-
-**The Bug:** In certain browsers (especially Chrome), the synchronous `revokeObjectURL` call destroys the memory pointer *before* the browser's download manager can pull the file bytes. The browser aborts the download, throws an internal "Not Found" error (which LibreChat reads as a Network Error), and falls back to using the last segment of the destroyed URL (the UUID `41db7091...`) as the filename.
-
-**The Fix:** You must patch your LibreChat instance's frontend code to delay the revocation. If you are using standard `docker-compose.yml`, you can patch the compiled JS inside the running container using `sed` or Python:
-
-```bash
-docker exec librechat python3 -c "import re; f='/app/client/dist/assets/index.js'; text=open(f).read(); new_text=re.sub(r'window\.URL\.revokeObjectURL\(([^)]+)\)', r'setTimeout(()=>window.URL.revokeObjectURL(\1),3000)', text); open(f,'w').write(new_text)"
-```
-*(Note: Replace `index.js` with the actual hashed filename in your `/app/client/dist/assets/` directory).*
-
-By using `FileResponse` on your API backend and patching the `revokeObjectURL` race condition on the LibreChat frontend, file downloads will work flawlessly across all browsers.
+### Maintenance
+- If files are not showing up or downloads still fail:
+  1. Clear browser cache (to reset the UI's internal blob state).
+  2. Start a new chat session to reset the container state.
+  3. Verify Docker volumes are correctly mounted at `/app/shared_volumes/sessions/`.
