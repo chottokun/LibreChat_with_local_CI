@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 import main
 from main import KernelManager
-from docker.errors import NotFound, APIError
+from docker.errors import NotFound
 
 # Note: We use real docker.errors exceptions to ensure compatibility
 # with the except clause in main.py's execute_code method.
