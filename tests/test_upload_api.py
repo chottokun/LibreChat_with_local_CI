@@ -1,8 +1,6 @@
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import MagicMock, patch
-import os
-import io
+from unittest.mock import patch
 
 from main import app, API_KEY, kernel_manager
 
