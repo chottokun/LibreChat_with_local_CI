@@ -85,10 +85,7 @@ def wrap_code(code: str) -> str:
 
         last_node = tree.body[-1]
         if isinstance(last_node, ast.Expr):
-            # Wrap the expression in:
-            # __last_res__ = <expression>
-            # if __last_res__ is not None: print(repr(__last_res__))
-            # This mimics Jupyter/Notebook behavior.
+            # Wrap the expression to mimic Jupyter/Notebook behavior.
 
             # Create: __last_res__ = <last_node.value>
             assign_node = ast.Assign(
