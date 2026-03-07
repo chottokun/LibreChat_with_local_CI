@@ -573,23 +573,27 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
     with kernel_manager.lock:
         if nanoid_session not in kernel_manager.file_id_map:
             kernel_manager.file_id_map[nanoid_session] = {}
-    
-    for f in current_files:
-        mime_type, _ = mimetypes.guess_type(f)
-        # Generate or reuse nanoid for this file
-        with kernel_manager.lock:
-            existing_ids = {v: k for k, v in kernel_manager.file_id_map[nanoid_session].items()}
+
+        session_map = kernel_manager.file_id_map[nanoid_session]
+        # Pre-calculate reverse mapping once to avoid O(N^2) complexity in the loop
+        existing_ids = {v: k for k, v in session_map.items()}
+
+        for f in current_files:
+            mime_type, _ = mimetypes.guess_type(f)
+            # Generate or reuse nanoid for this file
             if f in existing_ids:
                 nanoid_file = existing_ids[f]
             else:
                 nanoid_file = generate_nanoid()
-                kernel_manager.file_id_map[nanoid_session][nanoid_file] = f
-        structured_files.append({
-            "id": nanoid_file,
-            "name": f,
-            "url": f"/api/files/code/download/{nanoid_session}/{nanoid_file}",
-            "type": mime_type or "application/octet-stream"
-        })
+                session_map[nanoid_file] = f
+                existing_ids[f] = nanoid_file # Update local lookup too
+
+            structured_files.append({
+                "id": nanoid_file,
+                "name": f,
+                "url": f"/api/files/code/download/{nanoid_session}/{nanoid_file}",
+                "type": mime_type or "application/octet-stream"
+            })
     
     return {
         "stdout": result["stdout"],
@@ -650,23 +654,30 @@ async def upload_files(
             nanoid_session = kernel_manager.session_to_nanoid.get(real_session_id, sid)
 
         uploaded_files = []
+        # Store filenames to process mappings in a single lock block after all IO
+        uploaded_filenames = []
         for f in upload_list:
             content = await f.read()
             kernel_manager.upload_file(real_session_id, f.filename, content)
+            uploaded_filenames.append(f.filename)
 
-            # Ensure file mapping exists
-            with kernel_manager.lock:
-                if nanoid_session not in kernel_manager.file_id_map:
-                    kernel_manager.file_id_map[nanoid_session] = {}
+        # Update file mappings in a single lock block
+        with kernel_manager.lock:
+            if nanoid_session not in kernel_manager.file_id_map:
+                kernel_manager.file_id_map[nanoid_session] = {}
 
-                existing_ids = {v: k for k, v in kernel_manager.file_id_map[nanoid_session].items()}
-                if f.filename in existing_ids:
-                    file_id = existing_ids[f.filename]
+            session_map = kernel_manager.file_id_map[nanoid_session]
+            existing_ids = {v: k for k, v in session_map.items()}
+
+            for fname in uploaded_filenames:
+                if fname in existing_ids:
+                    file_id = existing_ids[fname]
                 else:
                     file_id = generate_nanoid()
-                    kernel_manager.file_id_map[nanoid_session][file_id] = f.filename
+                    session_map[file_id] = fname
+                    existing_ids[fname] = file_id
 
-            uploaded_files.append({"fileId": file_id, "filename": f.filename})
+                uploaded_files.append({"fileId": file_id, "filename": fname})
         
         # Standardize response structure
         res = {
