@@ -257,6 +257,54 @@ def test_recover_containers_skips(kernel_manager):
         recovered_calls = [call for call in mock_logger.info.call_args_list if "Recovered session" in call.args[0]]
         assert len(recovered_calls) == 0
 
+def test_recover_containers_session_id_extraction_failure(kernel_manager):
+    # Setup
+    mock_container = MagicMock()
+    # Trigger Exception on labels.get
+    mock_container.labels.get.side_effect = Exception("Label extraction failed")
+
+    main.DOCKER_CLIENT.containers.list.return_value = [mock_container]
+
+    with patch("main.logger") as mock_logger:
+        # Execute
+        kernel_manager.recover_containers()
+
+        # Assert
+        # Should catch "Error during container recovery"
+        any_outer_failed = any("Error during container recovery" in call.args[0] for call in mock_logger.error.call_args_list)
+        assert any_outer_failed
+
+def test_recover_containers_double_fault(kernel_manager):
+    """
+    Verifies that if an error occurs during the inner recovery logging,
+    the outer recovery error handler catches it.
+    """
+    # Setup
+    mock_container = MagicMock()
+    mock_container.id = "c1"
+    mock_container.labels = {"session_id": "s1"}
+
+    main.DOCKER_CLIENT.containers.list.return_value = [mock_container]
+
+    with patch("main.logger") as mock_logger:
+        # 1. Mock logger.info calls:
+        # First call (line 277): "Scanning for existing containers..." -> Success (None)
+        # Second call (line 294): "Recovered session..." -> Fails
+        mock_logger.info.side_effect = [None, Exception("Inner recovery failed")]
+
+        # 2. Mock logger.error calls:
+        # First call (line 296): "Failed to recover container..." -> Fails (Double fault)
+        # Second call (line 298): "Error during container recovery..." -> Success (None)
+        mock_logger.error.side_effect = [Exception("Logger failure"), None]
+
+        # Execute
+        kernel_manager.recover_containers()
+
+        # Assert
+        # Check if the outer logger.error was called with the "Error during container recovery" message
+        any_outer_failed = any("Error during container recovery" in call.args[0] for call in mock_logger.error.call_args_list)
+        assert any_outer_failed
+
 def test_download_file_invalid_filename(kernel_manager):
     with pytest.raises(HTTPException) as excinfo:
         kernel_manager.download_file("session_id", "")
