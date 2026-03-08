@@ -215,13 +215,8 @@ class KernelManager:
         with self.lock:
             return self.start_new_container_unlocked(session_id)
 
-    def start_new_container_unlocked(self, session_id: str):
-        # Enforce max sessions
-        if len(self.active_kernels) >= RCE_MAX_SESSIONS:
-            logger.warning("Max sessions reached: %d", RCE_MAX_SESSIONS)
-            raise HTTPException(status_code=503, detail="Server is at capacity. Please try again later.")
-
-        # Configuration from environment variables
+    def _get_container_config(self) -> Dict[str, Any]:
+        """Parses resource limits and configuration from environment variables."""
         mem_limit = os.environ.get("RCE_MEM_LIMIT", "512m")
         cpu_limit_nano = int(os.environ.get("RCE_CPU_LIMIT", "500000000")) # 0.5 CPU default
         network_enabled = os.environ.get("RCE_NETWORK_ENABLED", "false").lower() == "true"
@@ -233,25 +228,40 @@ class KernelManager:
                 docker.types.DeviceRequest(count=-1, capabilities=[['gpu']])
             )
 
+        return {
+            "mem_limit": mem_limit,
+            "nano_cpus": cpu_limit_nano,
+            "network_disabled": not network_enabled,
+            "device_requests": device_requests
+        }
+
+    def _prepare_volumes(self, session_id: str) -> Dict[str, Dict[str, str]]:
+        """Prepares session directory and returns volume mapping if enabled."""
+        if not RCE_DATA_DIR_HOST:
+            return {}
+
+        # Use HOST path for Docker mounting, but ensure INTERNAL path exists for writing
+        session_dir_host = os.path.join(RCE_DATA_DIR_HOST, session_id)
+        session_dir_internal = os.path.join(RCE_DATA_DIR_INTERNAL, session_id)
+        os.makedirs(session_dir_internal, exist_ok=True)
+
+        return {session_dir_host: {'bind': '/mnt/data', 'mode': 'rw'}}
+
+    def start_new_container_unlocked(self, session_id: str):
+        # Enforce max sessions
+        if len(self.active_kernels) >= RCE_MAX_SESSIONS:
+            logger.warning("Max sessions reached: %d", RCE_MAX_SESSIONS)
+            raise HTTPException(status_code=503, detail="Server is at capacity. Please try again later.")
+
         try:
-            volumes = {}
-            if RCE_DATA_DIR_HOST:
-                # Use HOST path for Docker mounting, but ensure INTERNAL path exists for writing
-                session_dir_host = os.path.join(RCE_DATA_DIR_HOST, session_id)
-                session_dir_internal = os.path.join(RCE_DATA_DIR_INTERNAL, session_id)
-                os.makedirs(session_dir_internal, exist_ok=True)
-                
-                volumes = {session_dir_host: {'bind': '/mnt/data', 'mode': 'rw'}}
+            config = self._get_container_config()
+            volumes = self._prepare_volumes(session_id)
 
             container = DOCKER_CLIENT.containers.run(
                 image=RCE_IMAGE_NAME,
                 command="tail -f /dev/null", # Keep alive
                 detach=True,
                 remove=True, # Remove when stopped
-                mem_limit=mem_limit,
-                nano_cpus=cpu_limit_nano,
-                network_disabled=not network_enabled,
-                device_requests=device_requests,
                 name=f"rce_{session_id}_{uuid.uuid4().hex[:6]}",
                 working_dir="/mnt/data",
                 labels={
@@ -259,7 +269,8 @@ class KernelManager:
                     "session_id": session_id
                 },
                 environment={"PYTHONUNBUFFERED": "1"},
-                volumes=volumes
+                volumes=volumes,
+                **config
             )
             # Ensure workspace exists
             container.exec_run(cmd=["mkdir", "-p", "/mnt/data"])
