@@ -333,3 +333,66 @@ def test_download_file_docker_empty_tar(kernel_manager):
         with pytest.raises(HTTPException) as excinfo:
             kernel_manager.download_file(session_id, filename)
         assert excinfo.value.status_code == 404
+
+def test_get_or_create_container_generic_exception_during_start(kernel_manager):
+    # Setup
+    session_id = "test_session"
+    mock_container = MagicMock()
+    mock_container.status = "exited"
+    mock_container.start.side_effect = Exception("Generic startup error")
+
+    kernel_manager.active_kernels[session_id] = {
+        "container": mock_container,
+        "last_accessed": time.time()
+    }
+
+    # Mock start_new_container_unlocked on the instance to verify session deletion
+    new_container = MagicMock()
+    def mock_start_new_unlocked(sid):
+        assert sid == session_id
+        # At this point, the old session MUST have been deleted from active_kernels
+        assert session_id not in kernel_manager.active_kernels
+        # Simulate its real behavior by adding the new one
+        kernel_manager.active_kernels[sid] = {"container": new_container, "last_accessed": time.time()}
+        return new_container
+
+    kernel_manager.start_new_container_unlocked = MagicMock(side_effect=mock_start_new_unlocked)
+
+    # Execute - Force refresh=True ensures we enter the block where start() is called
+    container = kernel_manager.get_or_create_container(session_id, force_refresh=True)
+
+    # Assert
+    assert container == new_container
+    mock_container.start.assert_called_once()
+    kernel_manager.start_new_container_unlocked.assert_called_once_with(session_id)
+
+def test_get_or_create_container_generic_exception_during_reload(kernel_manager):
+    # Setup
+    session_id = "test_session"
+    mock_container = MagicMock()
+    mock_container.reload.side_effect = Exception("Generic reload error")
+
+    kernel_manager.active_kernels[session_id] = {
+        "container": mock_container,
+        "last_accessed": time.time()
+    }
+
+    # Mock start_new_container_unlocked on the instance to verify session deletion
+    new_container = MagicMock()
+    def mock_start_new_unlocked(sid):
+        assert sid == session_id
+        # At this point, the old session MUST have been deleted from active_kernels
+        assert session_id not in kernel_manager.active_kernels
+        # Simulate its real behavior by adding the new one
+        kernel_manager.active_kernels[sid] = {"container": new_container, "last_accessed": time.time()}
+        return new_container
+
+    kernel_manager.start_new_container_unlocked = MagicMock(side_effect=mock_start_new_unlocked)
+
+    # Execute - Force refresh=True ensures we enter the block where reload() is called
+    container = kernel_manager.get_or_create_container(session_id, force_refresh=True)
+
+    # Assert
+    assert container == new_container
+    mock_container.reload.assert_called_once()
+    kernel_manager.start_new_container_unlocked.assert_called_once_with(session_id)
