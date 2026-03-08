@@ -316,6 +316,36 @@ def test_download_file_docker_not_found(kernel_manager):
             kernel_manager.download_file(session_id, filename)
         assert excinfo.value.status_code == 404
 
+def test_start_new_container_unlocked_max_sessions(kernel_manager):
+    # Setup
+    session_id = "new_session"
+    # Mock active_kernels to have RCE_MAX_SESSIONS entries
+    with patch("main.RCE_MAX_SESSIONS", 2):
+        kernel_manager.active_kernels = {"s1": {}, "s2": {}}
+
+        # Execute & Assert
+        with pytest.raises(HTTPException) as excinfo:
+            kernel_manager.start_new_container_unlocked(session_id)
+
+        assert excinfo.value.status_code == 503
+        assert "Server is at capacity" in excinfo.value.detail
+
+def test_start_new_container_unlocked_exec_failure(kernel_manager):
+    # Setup
+    session_id = "test_session"
+    mock_container = MagicMock()
+    main.DOCKER_CLIENT.containers.run.return_value = mock_container
+
+    # Mock exec_run to fail
+    mock_container.exec_run.side_effect = Exception("Exec failed")
+
+    # Execute & Assert
+    with pytest.raises(HTTPException) as excinfo:
+        kernel_manager.start_new_container_unlocked(session_id)
+
+    assert excinfo.value.status_code == 500
+    assert "Failed to start sandbox" in excinfo.value.detail
+
 def test_download_file_docker_empty_tar(kernel_manager):
     session_id = "test_session"
     filename = "test.txt"
