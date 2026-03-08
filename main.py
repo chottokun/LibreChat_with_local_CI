@@ -573,17 +573,21 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
     with kernel_manager.lock:
         if nanoid_session not in kernel_manager.file_id_map:
             kernel_manager.file_id_map[nanoid_session] = {}
+        # Pre-invert dictionary for O(1) filename lookups
+        existing_ids = {v: k for k, v in kernel_manager.file_id_map[nanoid_session].items()}
     
+    new_mappings = {}
     for f in current_files:
         mime_type, _ = mimetypes.guess_type(f)
         # Generate or reuse nanoid for this file
-        with kernel_manager.lock:
-            existing_ids = {v: k for k, v in kernel_manager.file_id_map[nanoid_session].items()}
-            if f in existing_ids:
-                nanoid_file = existing_ids[f]
-            else:
-                nanoid_file = generate_nanoid()
-                kernel_manager.file_id_map[nanoid_session][nanoid_file] = f
+        if f in existing_ids:
+            nanoid_file = existing_ids[f]
+        elif f in new_mappings:
+            nanoid_file = new_mappings[f]
+        else:
+            nanoid_file = generate_nanoid()
+            new_mappings[f] = nanoid_file
+
         structured_files.append({
             "id": nanoid_file,
             "name": f,
@@ -591,6 +595,12 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
             "type": mime_type or "application/octet-stream"
         })
     
+    # Batch update the shared mapping
+    if new_mappings:
+        with kernel_manager.lock:
+            for fname, fid in new_mappings.items():
+                kernel_manager.file_id_map[nanoid_session][fid] = fname
+
     return {
         "stdout": result["stdout"],
         "stderr": result["stderr"],
@@ -649,25 +659,36 @@ async def upload_files(
             
             nanoid_session = kernel_manager.session_to_nanoid.get(real_session_id, sid)
 
+        # Pre-invert dictionary for O(1) filename lookups
+        with kernel_manager.lock:
+            if nanoid_session not in kernel_manager.file_id_map:
+                kernel_manager.file_id_map[nanoid_session] = {}
+            existing_ids = {v: k for k, v in kernel_manager.file_id_map[nanoid_session].items()}
+
         uploaded_files = []
+        new_mappings = {}
         for f in upload_list:
             content = await f.read()
             kernel_manager.upload_file(real_session_id, f.filename, content)
 
-            # Ensure file mapping exists
-            with kernel_manager.lock:
-                if nanoid_session not in kernel_manager.file_id_map:
-                    kernel_manager.file_id_map[nanoid_session] = {}
-
-                existing_ids = {v: k for k, v in kernel_manager.file_id_map[nanoid_session].items()}
-                if f.filename in existing_ids:
-                    file_id = existing_ids[f.filename]
-                else:
-                    file_id = generate_nanoid()
-                    kernel_manager.file_id_map[nanoid_session][file_id] = f.filename
+            # Check existing_ids (initialized once before loop)
+            if f.filename in existing_ids:
+                file_id = existing_ids[f.filename]
+            elif f.filename in new_mappings:
+                # Handle potential duplicate filenames within the same batch
+                file_id = new_mappings[f.filename]
+            else:
+                file_id = generate_nanoid()
+                new_mappings[f.filename] = file_id
 
             uploaded_files.append({"fileId": file_id, "filename": f.filename})
         
+        # Batch update the shared mapping to minimize lock contention
+        if new_mappings:
+            with kernel_manager.lock:
+                for fname, fid in new_mappings.items():
+                    kernel_manager.file_id_map[nanoid_session][fid] = fname
+
         # Standardize response structure
         res = {
             "message": "success",
