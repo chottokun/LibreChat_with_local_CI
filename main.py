@@ -25,7 +25,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Configuration
-API_KEY = os.environ.get("LIBRECHAT_CODE_API_KEY", "your_secret_key")
+API_KEY = os.environ.get("LIBRECHAT_CODE_API_KEY")
+if not API_KEY:
+    logger.error("LIBRECHAT_CODE_API_KEY environment variable is not set.")
+    raise RuntimeError("LIBRECHAT_CODE_API_KEY environment variable is not set.")
+
 # RCE_DATA_DIR_HOST is the path on the Docker Host (used for mounting)
 _raw_data_dir = os.environ.get("RCE_DATA_DIR_HOST", os.environ.get("RCE_DATA_DIR", ""))
 # RCE_DATA_DIR_INTERNAL is the path inside this API container (used for writing files)
