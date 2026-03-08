@@ -9,7 +9,7 @@ import time
 import asyncio
 import string
 import secrets
-from fastapi import FastAPI, HTTPException, Security, UploadFile, File, Form, Query, BackgroundTasks, Request
+from fastapi import FastAPI, HTTPException, Security, UploadFile, File, Form, Query, BackgroundTasks
 from fastapi.security import APIKeyHeader
 from fastapi.responses import FileResponse
 import mimetypes
