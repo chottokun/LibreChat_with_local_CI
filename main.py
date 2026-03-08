@@ -618,6 +618,9 @@ async def upload_files(
     try:
         # Support both 'entity_id' (LibreChat default) and 'session_id' (form or query)
         sid = entity_id or session_id or session_id_query
+        if sid:
+            sid = sanitize_id(sid)
+
         if not sid:
             # If no session ID is provided, we generate one.
             sid = generate_nanoid()
@@ -632,7 +635,7 @@ async def upload_files(
         logger.info("Files found in request: %s", [f.filename for f in upload_list])
 
         # Resolve nanoid session ID if provided
-        real_session_id = kernel_manager.resolve_session_id(sanitize_id(sid))
+        real_session_id = kernel_manager.resolve_session_id(sid)
 
         # Get or create nanoid session ID for response
         with kernel_manager.lock:
