@@ -439,16 +439,18 @@ class KernelManager:
         Returns a dictionary with stdout, stderr, and exit_code.
         Raises HTTPException for system errors.
         """
-        container = self.get_or_create_container(session_id)
-        
-        # This implementation provides SECURITY (Isolation) and FILESYSTEM PERSISTENCE.
-        # We write the code to a temporary file inside the container using 'put_archive'
-        # to avoid shell escaping issues and command line length limits.
-        
-        code_filename = f"exec_{uuid.uuid4().hex}.py"
-        container_path = f"/mnt/data/{code_filename}"
-        
+        container = None
+        container_path = None
         try:
+            container = self.get_or_create_container(session_id)
+
+            # This implementation provides SECURITY (Isolation) and FILESYSTEM PERSISTENCE.
+            # We write the code to a temporary file inside the container using 'put_archive'
+            # to avoid shell escaping issues and command line length limits.
+
+            code_filename = f"exec_{uuid.uuid4().hex}.py"
+            container_path = f"/mnt/data/{code_filename}"
+
             # 1. Apply code wrapping for expression-only support
             wrapped_code = wrap_code(code)
 
@@ -475,10 +477,11 @@ class KernelManager:
             raise HTTPException(status_code=500, detail="An internal error occurred during code execution.")
         finally:
             # 3. Cleanup: remove the temporary file
-            try:
-                container.exec_run(cmd=["rm", container_path])
-            except Exception:
-                pass
+            if container and container_path:
+                try:
+                    container.exec_run(cmd=["rm", container_path])
+                except Exception:
+                    pass
 
 kernel_manager = KernelManager()
 
