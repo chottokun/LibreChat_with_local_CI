@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict
 from typing import List, Optional, Dict, Any
 import shutil
 import ast
+from contextlib import asynccontextmanager
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -130,7 +131,15 @@ def wrap_code(code: str) -> str:
         return code
     return code
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Recover existing containers
+    kernel_manager.recover_containers()
+    # Start cleanup background task
+    asyncio.create_task(kernel_manager.cleanup_loop())
+    yield
+
+app = FastAPI(lifespan=lifespan)
 
 @app.middleware("http")
 async def add_security_headers(request, call_next):
@@ -518,13 +527,6 @@ class CodeResponse(BaseModel):
     images: List[Dict[str, Any]] = [] # Matplotlib images or other plot captures
 
 # 4. Endpoints
-@app.on_event("startup")
-async def startup_event():
-    # Recover existing containers
-    kernel_manager.recover_containers()
-    # Start cleanup background task
-    asyncio.create_task(kernel_manager.cleanup_loop())
-
 @app.post("/exec", response_model=CodeResponse)
 @app.post("/run/exec", response_model=CodeResponse)
 async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
