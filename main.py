@@ -649,24 +649,32 @@ async def upload_files(
             
             nanoid_session = kernel_manager.session_to_nanoid.get(real_session_id, sid)
 
-        uploaded_files = []
-        for f in upload_list:
+        async def process_upload(f):
             content = await f.read()
-            kernel_manager.upload_file(real_session_id, f.filename, content)
+            await asyncio.to_thread(kernel_manager.upload_file, real_session_id, f.filename, content)
+            return f.filename
 
-            # Ensure file mapping exists
-            with kernel_manager.lock:
-                if nanoid_session not in kernel_manager.file_id_map:
-                    kernel_manager.file_id_map[nanoid_session] = {}
+        # Parallelize reading and uploading
+        filenames = await asyncio.gather(*(process_upload(f) for f in upload_list))
 
-                existing_ids = {v: k for k, v in kernel_manager.file_id_map[nanoid_session].items()}
-                if f.filename in existing_ids:
-                    file_id = existing_ids[f.filename]
+        # Batch update file mappings to minimize lock contention and avoid redundant work
+        uploaded_files = []
+        with kernel_manager.lock:
+            if nanoid_session not in kernel_manager.file_id_map:
+                kernel_manager.file_id_map[nanoid_session] = {}
+
+            session_file_map = kernel_manager.file_id_map[nanoid_session]
+            existing_ids = {v: k for k, v in session_file_map.items()}
+
+            for fname in filenames:
+                if fname in existing_ids:
+                    file_id = existing_ids[fname]
                 else:
                     file_id = generate_nanoid()
-                    kernel_manager.file_id_map[nanoid_session][file_id] = f.filename
+                    session_file_map[file_id] = fname
+                    existing_ids[fname] = file_id
 
-            uploaded_files.append({"fileId": file_id, "filename": f.filename})
+                uploaded_files.append({"fileId": file_id, "filename": fname})
         
         # Standardize response structure
         res = {
