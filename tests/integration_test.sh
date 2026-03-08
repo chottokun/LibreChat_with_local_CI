@@ -1,6 +1,10 @@
 #!/bin/bash
 BASE_URL="http://localhost:8000"
-API_KEY="your_secret_key"
+API_KEY="${LIBRECHAT_CODE_API_KEY}"
+if [ -z "$API_KEY" ]; then
+  echo "❌ ERROR: LIBRECHAT_CODE_API_KEY environment variable is not set."
+  exit 1
+fi
 PASS=0
 FAIL=0
 
