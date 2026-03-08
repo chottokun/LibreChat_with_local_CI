@@ -2,7 +2,7 @@ import pytest
 import time
 import io
 import tarfile
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, ANY
 from docker.errors import NotFound
 from fastapi import HTTPException
 import main
@@ -234,6 +234,38 @@ def test_recover_containers_inner_failure(kernel_manager):
 
         # Container 2 should still be in active_kernels
         assert "s2" in kernel_manager.active_kernels
+
+def test_recover_containers_assignment_failure(kernel_manager):
+    # Setup
+    mock_container1 = MagicMock()
+    mock_container1.id = "c1"
+    mock_container1.labels = {"session_id": "s1"}
+
+    mock_container2 = MagicMock()
+    mock_container2.id = "c2"
+    mock_container2.labels = {"session_id": "s2"}
+
+    main.DOCKER_CLIENT.containers.list.return_value = [mock_container1, mock_container2]
+
+    with patch("main.logger") as mock_logger, patch("main.time.time") as mock_time:
+        # Trigger an exception during the first container recovery.
+        # time.time() is called after session_id check.
+        mock_time.side_effect = [Exception("Time failure"), 123456789.0]
+
+        # Execute
+        kernel_manager.recover_containers()
+
+        # Assert
+        # Container 1 should NOT be in active_kernels because assignment failed due to time.time() exception
+        assert "s1" not in kernel_manager.active_kernels
+
+        # Error should be logged for container 1
+        # The log message is: "Failed to recover container %s: %s", container.id, e
+        mock_logger.error.assert_any_call("Failed to recover container %s: %s", "c1", ANY)
+
+        # Container 2 should still be recovered successfully
+        assert "s2" in kernel_manager.active_kernels
+        assert kernel_manager.active_kernels["s2"]["container"] == mock_container2
 
 def test_recover_containers_skips(kernel_manager):
     # Setup
