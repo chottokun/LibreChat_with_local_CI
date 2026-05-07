@@ -27,7 +27,9 @@ def test_run_code_success(mock_list_files, mock_execute):
     assert response.status_code == 200
     assert response.json()["stdout"] == "hello\n"
     assert response.json()["exit_code"] == 0
-    mock_execute.assert_called_once_with("test_session", "print('hello')")
+    # The session_id might be mapped to an internal UUID now
+    mock_execute.assert_called_once()
+    assert mock_execute.call_args[0][1] == "print('hello')"
 
 @patch("main.kernel_manager.execute_code")
 @patch("main.kernel_manager.list_files")
@@ -41,7 +43,8 @@ def test_run_exec_success(mock_list_files, mock_execute):
 
     assert response.status_code == 200
     assert response.json()["stdout"] == "exec_output"
-    mock_execute.assert_called_once_with("test_session_exec", "print('exec')")
+    mock_execute.assert_called_once()
+    assert mock_execute.call_args[0][1] == "print('exec')"
 
 @patch("main.kernel_manager.execute_code")
 @patch("main.kernel_manager.list_files")

@@ -10,6 +10,7 @@ import asyncio
 import string
 import secrets
 from fastapi import FastAPI, HTTPException, Security, UploadFile, File, Form, Query, BackgroundTasks, Request
+from contextlib import asynccontextmanager
 from fastapi.security import APIKeyHeader
 from fastapi.responses import FileResponse
 import mimetypes
@@ -130,7 +131,21 @@ def wrap_code(code: str) -> str:
         return code
     return code
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Recover existing containers
+    kernel_manager.recover_containers()
+    # Start cleanup background task
+    cleanup_task = asyncio.create_task(kernel_manager.cleanup_loop())
+    yield
+    # Shutdown logic
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        logger.info("Cleanup task cancelled during shutdown.")
+
+app = FastAPI(lifespan=lifespan)
 
 @app.middleware("http")
 async def add_security_headers(request, call_next):
@@ -398,9 +413,11 @@ class KernelManager:
                     if f:
                         return f.read(), stat.get('mtime', 0)
                 raise FileNotFoundError()
+            except (docker.errors.NotFound, FileNotFoundError):
+                raise HTTPException(status_code=404, detail="File not found")
             except Exception as e:
                 logger.error("Failed to download file %s from session %s: %s", filename, session_id, e)
-                raise HTTPException(status_code=404, detail="File not found")
+                raise HTTPException(status_code=500, detail="Internal server error during file download")
 
     def list_files(self, session_id: str):
         container = self.get_or_create_container(session_id)
@@ -414,7 +431,7 @@ class KernelManager:
             return [f for f in files if f]
         return []
 
-    def _execute_in_container(self, container, code_content: str, path: str, filename: str):
+    def _execute_in_container(self, container, code_content: str, path: str, filename: str, lang: str = "python"):
         """
         Uploads code to the container and executes it.
         """
@@ -427,38 +444,56 @@ class KernelManager:
 
         container.put_archive("/mnt/data", tar_stream.getvalue())
 
+        cmd = ["python3", path]
+        if lang in ["bash", "sh"]:
+            cmd = ["bash", path]
+        elif lang == "r":
+            cmd = ["Rscript", path]
+
         return container.exec_run(
-            cmd=["python3", path],
+            cmd=cmd,
             workdir="/mnt/data",
             demux=True
         )
 
-    def execute_code(self, session_id: str, code: str):
+    def execute_code(self, session_id: str, code: str, lang: str = "python"):
         """
         Executes code within the container.
         Returns a dictionary with stdout, stderr, and exit_code.
         Raises HTTPException for system errors.
         """
-        container = self.get_or_create_container(session_id)
-        
-        # This implementation provides SECURITY (Isolation) and FILESYSTEM PERSISTENCE.
-        # We write the code to a temporary file inside the container using 'put_archive'
-        # to avoid shell escaping issues and command line length limits.
-        
-        code_filename = f"exec_{uuid.uuid4().hex}.py"
-        container_path = f"/mnt/data/{code_filename}"
+        container = None
+        container_path = None
         
         try:
-            # 1. Apply code wrapping for expression-only support
-            wrapped_code = wrap_code(code)
+            container = self.get_or_create_container(session_id)
+
+            # This implementation provides SECURITY (Isolation) and FILESYSTEM PERSISTENCE.
+            # We write the code to a temporary file inside the container using 'put_archive'
+            # to avoid shell escaping issues and command line length limits.
+
+            ext = "py"
+            if lang in ["bash", "sh"]:
+                ext = "sh"
+            elif lang == "r":
+                ext = "R"
+
+            code_filename = f"exec_{uuid.uuid4().hex}.{ext}"
+            container_path = f"/mnt/data/{code_filename}"
+
+            # 1. Apply code wrapping for expression-only support (Python only)
+            if lang in ["python", "py"]:
+                wrapped_code = wrap_code(code)
+            else:
+                wrapped_code = code
 
             try:
-                exec_result = self._execute_in_container(container, wrapped_code, container_path, code_filename)
+                exec_result = self._execute_in_container(container, wrapped_code, container_path, code_filename, lang)
             except (docker.errors.APIError, docker.errors.NotFound):
                 # Optimistic assumption failed: container might be stopped or gone
                 # Recovery: Force refresh and retry once
                 container = self.get_or_create_container(session_id, force_refresh=True)
-                exec_result = self._execute_in_container(container, wrapped_code, container_path, code_filename)
+                exec_result = self._execute_in_container(container, wrapped_code, container_path, code_filename, lang)
             
             stdout, stderr = exec_result.output
 
@@ -518,13 +553,6 @@ class CodeResponse(BaseModel):
     images: List[Dict[str, Any]] = [] # Matplotlib images or other plot captures
 
 # 4. Endpoints
-@app.on_event("startup")
-async def startup_event():
-    # Recover existing containers
-    kernel_manager.recover_containers()
-    # Start cleanup background task
-    asyncio.create_task(kernel_manager.cleanup_loop())
-
 @app.post("/exec", response_model=CodeResponse)
 @app.post("/run/exec", response_model=CodeResponse)
 async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
@@ -550,20 +578,26 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
     logger.info("Effective session ID for exec: %s", effective_session_id)
 
     # Resolve nanoid session ID if provided
-    original_id = sanitize_id(effective_session_id) or str(uuid.uuid4())
-    real_session_id = kernel_manager.resolve_session_id(original_id)
+    sid = effective_session_id or generate_nanoid()
+    s_sid = sanitize_id(sid)
+    real_session_id = kernel_manager.resolve_session_id(s_sid)
     
     # Generate or reuse a nanoid-compatible session ID for LibreChat
     with kernel_manager.lock:
-        if real_session_id not in kernel_manager.session_to_nanoid:
-            nanoid_session = generate_nanoid()
-            kernel_manager.session_to_nanoid[real_session_id] = nanoid_session
-            kernel_manager.nanoid_to_session[nanoid_session] = real_session_id
-        else:
-            nanoid_session = kernel_manager.session_to_nanoid[real_session_id]
+        if real_session_id == s_sid:
+            # This was a new ID provided by LibreChat or generated by us.
+            if s_sid not in kernel_manager.nanoid_to_session:
+                internal_uuid = str(uuid.uuid4())
+                kernel_manager.nanoid_to_session[s_sid] = internal_uuid
+                kernel_manager.session_to_nanoid[internal_uuid] = s_sid
+                real_session_id = internal_uuid
+            else:
+                real_session_id = kernel_manager.nanoid_to_session[s_sid]
+
+        nanoid_session = kernel_manager.session_to_nanoid.get(real_session_id, s_sid)
     
     # Run in sandbox
-    result = kernel_manager.execute_code(real_session_id, req.code)
+    result = kernel_manager.execute_code(real_session_id, req.code, lang=(req.lang or "python").lower())
     
     # List generated files and format them for LibreChat native ingestion
     current_files = kernel_manager.list_files(real_session_id)
@@ -649,24 +683,29 @@ async def upload_files(
             
             nanoid_session = kernel_manager.session_to_nanoid.get(real_session_id, sid)
 
-        uploaded_files = []
-        for f in upload_list:
+        async def process_file(f):
             content = await f.read()
-            kernel_manager.upload_file(real_session_id, f.filename, content)
+            await asyncio.to_thread(kernel_manager.upload_file, real_session_id, f.filename, content)
+            return f.filename
 
-            # Ensure file mapping exists
-            with kernel_manager.lock:
-                if nanoid_session not in kernel_manager.file_id_map:
-                    kernel_manager.file_id_map[nanoid_session] = {}
+        # Parallelize file reading and uploading
+        results = await asyncio.gather(*[process_file(f) for f in upload_list])
 
-                existing_ids = {v: k for k, v in kernel_manager.file_id_map[nanoid_session].items()}
-                if f.filename in existing_ids:
-                    file_id = existing_ids[f.filename]
+        uploaded_files = []
+        with kernel_manager.lock:
+            if nanoid_session not in kernel_manager.file_id_map:
+                kernel_manager.file_id_map[nanoid_session] = {}
+
+            existing_ids = {v: k for k, v in kernel_manager.file_id_map[nanoid_session].items()}
+
+            for filename in results:
+                if filename in existing_ids:
+                    file_id = existing_ids[filename]
                 else:
                     file_id = generate_nanoid()
-                    kernel_manager.file_id_map[nanoid_session][file_id] = f.filename
+                    kernel_manager.file_id_map[nanoid_session][file_id] = filename
 
-            uploaded_files.append({"fileId": file_id, "filename": f.filename})
+                uploaded_files.append({"fileId": file_id, "filename": filename})
         
         # Standardize response structure
         res = {
