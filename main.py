@@ -700,8 +700,11 @@ async def upload_files(
 
         async def process_file(f):
             content = await f.read()
-            await asyncio.to_thread(kernel_manager.upload_file, real_session_id, f.filename, content)
-            return f.filename
+            safe_filename = os.path.basename(f.filename)
+            if not safe_filename:
+                raise HTTPException(status_code=400, detail="Invalid filename")
+            await asyncio.to_thread(kernel_manager.upload_file, real_session_id, safe_filename, content)
+            return safe_filename
 
         # Parallelize file reading and uploading
         results = await asyncio.gather(*[process_file(f) for f in upload_list])
@@ -801,6 +804,9 @@ async def download_session_file(
         real_filename = s_filename
         if s_session_id in kernel_manager.file_id_map and s_filename in kernel_manager.file_id_map[s_session_id]:
             real_filename = kernel_manager.file_id_map[s_session_id][s_filename]
+        
+        # Double check: ensure real_filename is just a basename
+        real_filename = os.path.basename(real_filename)
     
     # Determine the file path if volume mounting is enabled
     if RCE_DATA_DIR_HOST:
