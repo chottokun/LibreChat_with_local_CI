@@ -1,0 +1,77 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '0 0 * * 1' # Weekly security scan
+
+jobs:
+  python-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+          
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+        
+      - name: Lint with Ruff
+        run: uv run ruff check .
+        
+      - name: Type check with Pyright
+        run: uv run pyright .
+        
+      - name: Security audit (Bandit)
+        run: |
+          uv add bandit
+          uv run bandit -r . -x ./tests,./.venv
+          
+      - name: Run Tests
+        env:
+          LIBRECHAT_CODE_API_KEY: test-secret-key
+        run: |
+          # Use mock-heavy unit tests first to ensure logic is sound
+          uv run pytest tests/
+
+  docker-security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Build RCE Sandbox Image
+        run: docker build -f Dockerfile.rce -t custom-rce-kernel:latest .
+        
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'custom-rce-kernel:latest'
+          format: 'table'
+          exit-code: '1' # Fail the CI if vulnerabilities are found
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
+  codeql-analysis:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3

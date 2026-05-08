@@ -33,9 +33,6 @@ def test_upload_with_volume_mount(temp_data_dir):
 
         assert response.status_code == 200
 
-        # The internal session_id will be a UUID if it was newly mapped
-        real_session_id = main.kernel_manager.nanoid_to_session.get(session_id, session_id)
-
         # Check if file exists in host temp dir
         # The code might generate a new internal UUID for the session
         nanoid = response.json()["session_id"]

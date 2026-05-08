@@ -404,7 +404,7 @@ def test_download_file_docker_empty_tar(kernel_manager):
 
     # Empty tar
     tar_stream = io.BytesIO()
-    with tarfile.open(fileobj=tar_stream, mode='w') as tar:
+    with tarfile.open(fileobj=tar_stream, mode='w'):
         pass
 
     mock_container.get_archive.return_value = ([tar_stream.getvalue()], {"mtime": 0})
