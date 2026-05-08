@@ -119,7 +119,7 @@ All settings are controlled via environment variables in the `.env` file:
 
 | Variable | Default | Description |
 |---|---|---|
-| `LIBRECHAT_CODE_API_KEY` | `your_secret_key` | API key for authentication |
+| `LIBRECHAT_CODE_API_KEY` | (Required) | API key for authentication (Must be set) |
 | `RCE_IMAGE_NAME` | `custom-rce-kernel:latest` | Docker image to spawn for sandboxes |
 | `RCE_MEM_LIMIT` | `512m` | Memory limit per sandbox container |
 | `RCE_CPU_LIMIT` | `500000000` | CPU quota in nanoseconds (0.5 CPU) |
