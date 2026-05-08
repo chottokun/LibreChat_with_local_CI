@@ -1,6 +1,5 @@
 import pytest
 from unittest.mock import MagicMock, patch, ANY
-import main
 from main import KernelManager
 from fastapi import HTTPException
 import docker

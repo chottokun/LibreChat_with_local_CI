@@ -1,8 +1,6 @@
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import MagicMock, patch
-import os
-import io
+from unittest.mock import patch
 
 from main import app, API_KEY, kernel_manager
 
@@ -65,7 +63,7 @@ def test_upload_success_session_id_field():
         mock_upload.assert_called_once()
 
 def test_upload_success_query_param():
-    with patch.object(kernel_manager, 'upload_file') as mock_upload:
+    with patch.object(kernel_manager, 'upload_file'):
         response = client.post(
             "/upload?session_id=query-session",
             headers={"X-API-Key": API_KEY},
@@ -76,7 +74,7 @@ def test_upload_success_query_param():
         assert response.json()["session_id"] == "query-session"
 
 def test_upload_no_session_id_generates_one():
-    with patch.object(kernel_manager, 'upload_file') as mock_upload:
+    with patch.object(kernel_manager, 'upload_file'):
         response = client.post(
             "/upload",
             headers={"X-API-Key": API_KEY},

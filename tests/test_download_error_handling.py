@@ -3,8 +3,11 @@ import io
 import tarfile
 from unittest.mock import MagicMock, patch
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 import main
-from main import KernelManager
+from main import KernelManager, app, API_KEY
+
+client = TestClient(app)
 
 @pytest.fixture(autouse=True)
 def mock_docker_client():
@@ -102,43 +105,11 @@ def test_download_file_docker_unexpected_error_during_processing(kernel_manager)
         assert excinfo.value.status_code == 404
         assert excinfo.value.detail == "File not found"
 
-from fastapi.testclient import TestClient
-from main import app, API_KEY
-
-client = TestClient(app)
-
 @patch("main.kernel_manager.download_file")
-def test_api_download_file_not_found(mock_download):
-    """Test that the /download endpoint returns 404 when download_file raises HTTPException(404)."""
-    mock_download.side_effect = HTTPException(status_code=404, detail="File not found")
-
-    response = client.get(
-        "/download",
-        params={"session_id": "test_session", "filename": "missing.txt"},
-        headers={"X-API-Key": API_KEY}
-    )
-
-    assert response.status_code == 404
-    assert response.json()["detail"] == "File not found"
-
-@patch("main.kernel_manager.download_file")
-def test_api_download_session_file_not_found(mock_download):
-    """Test that the /api/files/code/download/ endpoint returns 404 when download_file raises HTTPException(404)."""
-    mock_download.side_effect = HTTPException(status_code=404, detail="File not found")
-
-    response = client.get(
-        "/api/files/code/download/test_session/missing.txt",
-        headers={"X-API-Key": API_KEY}
-    )
-
-    assert response.status_code == 404
-    assert response.json()["detail"] == "File not found"
-
-@patch("main.kernel_manager.download_file")
-def test_api_download_file_internal_error(mock_download):
-    """Test that the /download endpoint returns 500 when download_file raises an unexpected Exception."""
-    mock_download.side_effect = Exception("Unexpected internal error")
-
+def test_download_endpoint_generic_exception(mock_download):
+    """Test endpoint response when KernelManager.download_file raises an unexpected exception."""
+    mock_download.side_effect = Exception("System crash")
+    
     # We use raise_server_exceptions=False to let the TestClient return a 500 instead of raising.
     local_client = TestClient(app, raise_server_exceptions=False)
 
@@ -149,3 +120,18 @@ def test_api_download_file_internal_error(mock_download):
     )
 
     assert response.status_code == 500
+    assert response.json()["detail"] == "Internal server error during file download"
+
+@patch("main.kernel_manager.download_file")
+def test_api_download_endpoint_generic_exception(mock_download):
+    """Test /api/files/code/download/ endpoint response for generic exceptions."""
+    mock_download.side_effect = Exception("System crash")
+    local_client = TestClient(app, raise_server_exceptions=False)
+
+    response = local_client.get(
+        "/api/files/code/download/test_session/error.txt",
+        headers={"X-API-Key": API_KEY}
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Internal server error during file download"

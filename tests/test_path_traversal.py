@@ -1,9 +1,7 @@
 import pytest
 import os
-import uuid
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
-import main
 from main import app, kernel_manager
 
 client = TestClient(app)
@@ -44,7 +42,7 @@ def test_path_traversal_vulnerability(tmp_path):
             
         # 2. Try to download the file using the returned file_id
         download_url = f"/download/{session_id}/{file_id}"
-        response_dl = client.get(download_url, headers=headers)
+        client.get(download_url, headers=headers)
         
         # The stored filename should be sanitized!
         # If it's vulnerable, stored_filename will be "../../etc/passwd"
