@@ -622,23 +622,26 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
     with kernel_manager.lock:
         if nanoid_session not in kernel_manager.file_id_map:
             kernel_manager.file_id_map[nanoid_session] = {}
+        
+        session_map = kernel_manager.file_id_map[nanoid_session]
+        existing_ids = {v: k for k, v in session_map.items()}
     
-    for f in current_files:
-        mime_type, _ = mimetypes.guess_type(f)
-        # Generate or reuse nanoid for this file
-        with kernel_manager.lock:
-            existing_ids = {v: k for k, v in kernel_manager.file_id_map[nanoid_session].items()}
+        for f in current_files:
+            mime_type, _ = mimetypes.guess_type(f)
+            # Generate or reuse nanoid for this file
             if f in existing_ids:
                 nanoid_file = existing_ids[f]
             else:
                 nanoid_file = generate_nanoid()
-                kernel_manager.file_id_map[nanoid_session][nanoid_file] = f
-        structured_files.append({
-            "id": nanoid_file,
-            "name": f,
-            "url": f"/api/files/code/download/{nanoid_session}/{nanoid_file}",
-            "type": mime_type or "application/octet-stream"
-        })
+                session_map[nanoid_file] = f
+                existing_ids[f] = nanoid_file # Update local lookup
+            
+            structured_files.append({
+                "id": nanoid_file,
+                "name": f,
+                "url": f"/api/files/code/download/{nanoid_session}/{nanoid_file}",
+                "type": mime_type or "application/octet-stream"
+            })
     
     return {
         "stdout": result["stdout"],
@@ -722,6 +725,7 @@ async def upload_files(
                 else:
                     file_id = generate_nanoid()
                     kernel_manager.file_id_map[nanoid_session][file_id] = filename
+                    existing_ids[filename] = file_id
 
                 uploaded_files.append({"fileId": file_id, "filename": filename})
         
