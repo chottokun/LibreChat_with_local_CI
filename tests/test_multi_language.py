@@ -29,27 +29,46 @@ def mock_docker():
         mock_client.containers.run.return_value = mock_container
         yield mock_client
 
-def test_multi_language_support(mock_docker):
+def test_multi_language_bash(mock_docker):
     headers = {"X-API-Key": API_KEY}
-
-    # 1. Test Bash execution
+    code = "echo 'hello world'"
     response = client.post(
         "/exec",
         json={
-            "code": "echo hello",
+            "code": code,
             "lang": "bash",
             "session_id": "test-bash"
         },
         headers=headers
     )
     assert response.status_code == 200
-
+    assert response.json()["stdout"] == "stdout_output"
+    
+    # Verify that it used bash and the correct extension
     calls = mock_docker.containers.run.return_value.exec_run.call_args_list
-    # Find the call that looks like the main execution
-    exec_call = next(c for c in calls if "bash" in c.kwargs.get("cmd", [])[0] and ".sh" in c.kwargs.get("cmd", [])[1])
-
-    # NEW behavior: it uses ["bash", path] for lang="bash"
+    exec_call = next(c for c in calls if "bash" in c.kwargs.get("cmd", [])[0])
     assert exec_call.kwargs["cmd"][0] == "bash"
+    assert exec_call.kwargs["cmd"][1].endswith(".sh")
+
+def test_multi_language_r(mock_docker):
+    headers = {"X-API-Key": API_KEY}
+    code = "print('hello')"
+    response = client.post(
+        "/exec",
+        json={
+            "code": code,
+            "lang": "r",
+            "session_id": "test-r"
+        },
+        headers=headers
+    )
+    assert response.status_code == 200
+    
+    # Verify that it used Rscript and the correct extension
+    calls = mock_docker.containers.run.return_value.exec_run.call_args_list
+    exec_call = next(c for c in calls if "Rscript" in c.kwargs.get("cmd", [])[0])
+    assert exec_call.kwargs["cmd"][0] == "Rscript"
+    assert exec_call.kwargs["cmd"][1].endswith(".R")
 
 def test_python_still_wrapped(mock_docker):
     headers = {"X-API-Key": API_KEY}
