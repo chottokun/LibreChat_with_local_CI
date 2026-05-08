@@ -13,7 +13,9 @@ dependencies = [
     "pytest-asyncio",
     "pytest-mock>=3.15.1",
     "python-multipart>=0.0.20",
+    "setuptools>=82.0.1",
     "uvicorn>=0.38.0",
+    "wheel>=0.47.0",
 ]
 
 [tool.pytest.ini_options]
