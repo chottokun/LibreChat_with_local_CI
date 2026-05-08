@@ -66,6 +66,11 @@ Ollamaをローカルで稼働させて連携させたい場合、以下の2つ�
 `docker-compose.full.yml` 内の `ollama` セクションのコメントアウトを解除して起動します：
 1. `docker-compose.full.yml` の `ollama:` サービス部分のコメントを外す。
 2. `docker compose -f docker-compose.yml -f docker-compose.full.yml up -d` を再実行。
+3. デフォルトモデルをダウンロード：
+   ```bash
+   docker exec -it ollama ollama pull qwen2.5-coder:3b
+   ```
+
 
 #### B. すでに別でOllamaコンテナを稼働させている場合
 既存のOllamaコンテナをLibreChatのネットワークに接続します：
