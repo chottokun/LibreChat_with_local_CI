@@ -525,10 +525,11 @@ class KernelManager:
             raise HTTPException(status_code=500, detail="An internal error occurred during code execution.")
         finally:
             # 3. Cleanup: remove the temporary file
-            try:
-                container.exec_run(cmd=["rm", container_path])
-            except Exception:
-                pass
+            if container and container_path:
+                try:
+                    container.exec_run(cmd=["rm", container_path])
+                except Exception:
+                    pass
 
 kernel_manager = KernelManager()
 
