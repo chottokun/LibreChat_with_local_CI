@@ -82,6 +82,18 @@ services:
       - librechat-network
       - rce-internal
 
+  # ---------------------------------------------------------------------------
+  # Ollama Service (Optional - Uncomment to use local models)
+  # ---------------------------------------------------------------------------
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   container_name: ollama
+  #   restart: always
+  #   volumes:
+  #     - ollama-data:/root/.ollama
+  #   networks:
+  #     - librechat-network
+
 networks:
   librechat-network:
     driver: bridge
@@ -91,3 +103,4 @@ networks:
 volumes:
   mongodb-data:
   meili-data:
+  ollama-data:
