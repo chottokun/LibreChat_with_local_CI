@@ -814,21 +814,27 @@ async def download_session_file(
         real_filename = os.path.basename(real_filename)
     
     # Determine the file path if volume mounting is enabled
-    if RCE_DATA_DIR_HOST:
-        session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, real_session_id)
-        filepath = os.path.join(session_dir, real_filename)
-        if not os.path.exists(filepath):
-             raise HTTPException(status_code=404, detail="File not found")
-        tmp_filepath = filepath
-        cleanup_needed = False
-    else:
-        # Fallback to Docker API (get_archive)
-        content, mtime = kernel_manager.download_file(real_session_id, real_filename)
-        # Create a secure temporary file
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            tmp.write(content)
-            tmp_filepath = tmp.name
-        cleanup_needed = True
+    try:
+        if RCE_DATA_DIR_HOST:
+            session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, real_session_id)
+            filepath = os.path.join(session_dir, real_filename)
+            if not os.path.exists(filepath):
+                 raise HTTPException(status_code=404, detail="File not found")
+            tmp_filepath = filepath
+            cleanup_needed = False
+        else:
+            # Fallback to Docker API (get_archive)
+            content, mtime = kernel_manager.download_file(real_session_id, real_filename)
+            # Create a secure temporary file
+            with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                tmp.write(content)
+                tmp_filepath = tmp.name
+            cleanup_needed = True
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to download file %s from session %s: %s", filename, session_id, e)
+        raise HTTPException(status_code=500, detail="Internal server error during file download")
 
     # Guess MIME type
     mime_type, _ = mimetypes.guess_type(real_filename)
