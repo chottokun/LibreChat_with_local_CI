@@ -66,6 +66,10 @@ There are two ways to integrate Ollama for local model support:
 Uncomment the `ollama` service section in `docker-compose.full.yml`:
 1. Remove the `#` comments from the `ollama:` service in `docker-compose.full.yml`.
 2. Run `docker compose -f docker-compose.yml -f docker-compose.full.yml up -d`.
+3. Download the default model:
+   ```bash
+   docker exec -it ollama ollama pull qwen2.5-coder:3b
+   ```
 
 #### Method B: Use an Existing Ollama Container
 If you already have Ollama running in a separate container, connect it to the LibreChat network:
