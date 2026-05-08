@@ -394,7 +394,7 @@ def test_download_file_docker_not_found(kernel_manager):
     with patch("main.RCE_DATA_DIR_HOST", None):
         with pytest.raises(HTTPException) as excinfo:
             kernel_manager.download_file(session_id, filename)
-        assert excinfo.value.status_code == 500
+        assert excinfo.value.status_code == 404
 
 def test_download_file_docker_empty_tar(kernel_manager):
     session_id = "test_session"

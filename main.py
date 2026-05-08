@@ -432,7 +432,7 @@ class KernelManager:
                 raise HTTPException(status_code=404, detail="File not found")
             except Exception as e:
                 logger.error("Failed to download file %s from session %s: %s", filename, session_id, e)
-                raise HTTPException(status_code=500, detail="Internal server error during file download")
+                raise HTTPException(status_code=404, detail="File not found")
 
     def list_files(self, session_id: str):
         container = self.get_or_create_container(session_id)
