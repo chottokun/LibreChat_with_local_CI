@@ -528,7 +528,7 @@ class KernelManager:
             if container and container_path:
                 try:
                     container.exec_run(cmd=["rm", container_path])
-                except Exception:
+                except Exception: # nosec B110
                     pass
 
 kernel_manager = KernelManager()
