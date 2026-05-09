@@ -869,14 +869,14 @@ async def download_session_file(
 
     # Guess MIME type
     if real_filename.lower().endswith(".csv"):
-        mime_type = "text/csv"
+        mime_type = "text/plain"  # Force text/plain to allow inline display and bypass Chrome's HTTP download security block
     else:
         mime_type, _ = mimetypes.guess_type(real_filename)
         if not mime_type:
             mime_type = "application/octet-stream"
 
-    # Use inline for images and PDFs to allow them to be displayed in the chat interface
-    disposition = "inline" if mime_type.startswith(("image/", "application/pdf")) else "attachment"
+    # Use inline for images, PDFs, and text files (including CSV rendered as text/plain) to bypass Chrome's insecure download blocker
+    disposition = "inline" if mime_type.startswith(("image/", "application/pdf", "text/")) else "attachment"
 
     # Manually construct Content-Disposition header to ensure maximum compatibility with Japanese filenames.
     # Starlette's default FileResponse might not always provide the filename="..." fallback correctly for non-ASCII.
