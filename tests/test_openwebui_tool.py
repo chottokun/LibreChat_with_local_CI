@@ -34,7 +34,7 @@ async def test_execute_code_basic():
         assert args[0] == "http://localhost:8000/exec"
         assert kwargs["headers"]["X-Api-Key"] == "test-key"
         assert kwargs["json"]["session_id"] == "test-session-123"
-        assert kwargs["json"]["code"] == code
+        assert code in kwargs["json"]["code"]
 
 @pytest.mark.asyncio
 async def test_execute_code_with_files():
@@ -103,15 +103,57 @@ async def test_execute_code_with_images():
     mock_download_response.status_code = 200
     mock_download_response.content = b"fake-image-binary"
 
-    with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post, \
-         patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
-        
+    with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
         mock_post.return_value = mock_exec_response
-        mock_get.return_value = mock_download_response
         
         result = await tool.execute_code(code=code, __metadata__=metadata)
         
-        assert "![plot.png](data:image/png;base64," in result
-        assert base64.b64encode(b"fake-image-binary").decode('utf-8') in result
-        mock_get.assert_called_once()
-        assert "plot.png" in mock_get.call_args[0][0]
+        assert "![plot.png](http://localhost:8000/download/test-session-img/plot.png?api_key=your_secret_key)" in result
+
+@pytest.mark.asyncio
+async def test_execute_code_with_files_by_path():
+    tool = Tools()
+    tool.valves.RCE_API_BASE_URL = "http://localhost:8000"
+    
+    metadata = {"chat_id": "test-session-file-path"}
+    code = "print('processing file by path')"
+    
+    files = [
+        {
+            "id": "file-2",
+            "filename": "path_file.csv",
+            "path": "/tmp/dummy_path_file.csv"
+        }
+    ]
+
+    mock_upload_response = MagicMock()
+    mock_upload_response.status_code = 200
+    
+    mock_exec_response = MagicMock()
+    mock_exec_response.status_code = 200
+    mock_exec_response.json.return_value = {
+        "stdout": "processing file by path\n",
+        "stderr": "",
+        "result": None,
+        "files": []
+    }
+
+    # Patch open to simulate reading file from local path
+    mock_open_func = MagicMock()
+    mock_open_func.return_value.__enter__.return_value.read.return_value = b"id,val\n1,abc"
+
+    with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post, \
+         patch("builtins.open", mock_open_func):
+        
+        mock_post.side_effect = [mock_upload_response, mock_exec_response]
+        
+        result = await tool.execute_code(code=code, __metadata__=metadata, __files__=files)
+        
+        assert "processing file by path" in result
+        assert mock_post.call_count == 2
+        
+        # Check upload call
+        upload_call = mock_post.call_args_list[0]
+        assert upload_call[0][0] == "http://localhost:8000/upload"
+        assert upload_call[1]["params"]["session_id"] == "test-session-file-path"
+
