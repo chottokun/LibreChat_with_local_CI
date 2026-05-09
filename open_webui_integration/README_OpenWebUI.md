@@ -31,18 +31,31 @@ docker compose -f docker-compose.openwebui.yml up -d
 
 1. Open WebUIの画面左下のプロフィールアイコン -> **Workspace** -> **Tools** を選択します。
 2. **[Create Tool]** (または `+` ボタン) をクリックします。
-3. `open_webui_integration/rce_workspace_tool.py` の内容をコピーし、エディタに貼り付けます。
+3. エディタに `open_webui_integration/rce_workspace_tool.py` の内容をすべてコピーして貼り付けます。
+   * **[自動入力について]**: Open WebUIは貼り付けられたスクリプト先頭のメタデータ（docstring）を読み取り、以下の情報を自動入力します。
+     * **Name (名前)**: `Code Interpreter`
+     * **Description (説明)**: `Execute Python code securely, analyze data, and generate high-quality visual charts or plots.`
+     * **Tool ID (ツールID)**: `execute_code` (関数名から自動設定されます)
+   * 手動で入力する場合は、上記の「名前」と「説明」を設定してください。
 4. **[Save]** をクリックして保存します。
 
 ### 4. Valveの設定 (接続情報)
 
 1. 保存したツールの右側にある **[Valves]** (歯車アイコン) をクリックします。
-2. 以下の設定を行います：
+2. 以下の設定が初期設定（デフォルト）として自動入力されていますので、そのまま利用可能です。必要に応じて変更してください：
    - `RCE_API_BASE_URL`: `http://host.docker.internal:8000` (Open WebUIがDocker上で動いている場合)
-   - `RCE_API_KEY`: API本体の起動に使用した `LIBRECHAT_CODE_API_KEY` の値。
+   - `RCE_API_KEY`: `your_secret_key` (API本体の起動に使用した `LIBRECHAT_CODE_API_KEY` の値と一致させてください)
 3. **[Submit]** をクリックします。
 
-### 5. チャットでの利用
+### 5. Open WebUI の推奨設定 (Native Function Calling)
+
+Open WebUI上でLLMがグラフ画像やファイルをより美しくチャットエリア内に直接表示できるように、**Native Function Calling** 機能を有効にすることを強く推奨します。
+
+1. **管理者パネル** -> **設定** -> **モデル** にアクセスします。
+2. 使用する対象モデル（例: `qwen3.5` など）の右側のアクションから詳細パラメータ設定を開きます。
+3. 詳細パラメータにある「**Function Calling**」の項目を「**Native**」に設定して保存します。
+
+### 6. チャットでの利用
 
 1. 新しいチャットを開始します。
 2. モデル選択メニューで、ツールをサポートしているモデルを選択します。

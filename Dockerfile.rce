@@ -7,7 +7,7 @@ ENV PYTHONUTF8=1
 
 # Create a non-root user
 RUN groupadd -g 1000 sandboxuser && \
-    useradd -r -u 1000 -g sandboxuser sandboxuser
+    useradd -m -u 1000 -g sandboxuser sandboxuser
 
 WORKDIR /usr/src/app
 
