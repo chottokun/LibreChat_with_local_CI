@@ -178,3 +178,43 @@ class Tools:
                     output.append(f"File generated: [`{filename}`]({browser_url})")
 
             return "\n\n".join(output) if output else "Execution completed successfully with no output."
+
+    async def get_available_packages(
+        self,
+        __metadata__: Dict[str, Any],
+        __chat_id__: Optional[str] = None,
+    ) -> str:
+        """
+        Get a list of all pre-installed Python packages available in the Code Interpreter sandbox environment.
+        Use this tool when you need to check if a specific library (e.g., pandas, scipy, seaborn, etc.) is pre-installed.
+        :param __metadata__: Metadata containing session information.
+        :param __chat_id__: Direct chat ID injected by Open WebUI.
+        :return: List of pre-installed Python packages.
+        """
+        session_id = __chat_id__ or __metadata__.get("chat_id", "default_session")
+        base_url = self.valves.RCE_API_BASE_URL.rstrip("/")
+        headers = {"X-Api-Key": self.valves.RCE_API_KEY} if self.valves.RCE_API_KEY else {}
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            exec_url = f"{base_url}/exec"
+            payload = {
+                "session_id": session_id,
+                "code": "import sys; import subprocess; print(subprocess.check_output([sys.executable, '-m', 'pip', 'list']).decode())"
+            }
+            try:
+                response = await client.post(exec_url, json=payload, headers=headers)
+                response.raise_for_status()
+                result_data = response.json()
+                return result_data.get("stdout", "Unable to list packages.")
+            except Exception as e:
+                return (
+                    "Core pre-installed packages:\n"
+                    "- pandas\n"
+                    "- numpy\n"
+                    "- scipy\n"
+                    "- matplotlib\n"
+                    "- japanize-matplotlib\n"
+                    "- seaborn\n"
+                    f"(Fallback active due to connection error: {e})"
+                )
+
