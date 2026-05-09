@@ -177,7 +177,11 @@ class Tools:
                     output.append(f"![{filename}]({browser_url})")
                 else:
                     browser_url = f"{base_download_url}?api_key={api_key}" if api_key else base_download_url
-                    output.append(f'📥 Download: <a href="{browser_url}" target="_blank" rel="external noopener noreferrer" data-sveltekit-reload download="{filename}">[`{filename}`]</a>')
+                    output.append(
+                        f'📥 Download: <a href="{browser_url}" target="_blank" rel="external noopener noreferrer" data-sveltekit-reload download="{filename}">[`{filename}`]</a>\n\n'
+                        f'*(⚠️ If clicking the link triggers an Open WebUI error, please copy & paste this direct URL into a new browser tab to download instantly:)*\n'
+                        f'`{browser_url}`'
+                    )
 
             return "\n\n".join(output) if output else "Execution completed successfully with no output."
 
