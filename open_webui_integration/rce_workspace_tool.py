@@ -176,22 +176,8 @@ class Tools:
                     browser_url = f"{base_download_url}?api_key={api_key}" if api_key else base_download_url
                     output.append(f"![{filename}]({browser_url})")
                 else:
-                    form_html = (
-                        f'<form action="{base_download_url}" method="get" target="_blank" style="display: inline-block; margin: 5px 0;">'
-                    )
-                    if api_key:
-                        form_html += f'<input type="hidden" name="api_key" value="{api_key}">'
-                    form_html += (
-                        f'<button type="submit" style="background-color: #2563eb; color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; display: inline-flex; align-items: center; gap: 6px;">'
-                        f'<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" style="vertical-align: middle;">'
-                        f'<path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/>'
-                        f'<path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708l3 3z"/>'
-                        f'</svg>'
-                        f'Download {filename}'
-                        f'</button>'
-                        f'</form>'
-                    )
-                    output.append(form_html)
+                    browser_url = f"{base_download_url}?api_key={api_key}" if api_key else base_download_url
+                    output.append(f"📥 Download: [{filename}]({browser_url})")
 
             return "\n\n".join(output) if output else "Execution completed successfully with no output."
 
