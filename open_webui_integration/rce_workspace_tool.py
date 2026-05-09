@@ -177,7 +177,7 @@ class Tools:
                 if filename.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
                     output.append(f"![{filename}]({browser_url})")
                 else:
-                    output.append(f"File generated: [`{filename}`]({browser_url})")
+                    output.append(f"File generated: <a href=\"{browser_url}\" target=\"_blank\" download=\"{filename}\">[`{filename}`]</a>")
 
             return "\n\n".join(output) if output else "Execution completed successfully with no output."
 
