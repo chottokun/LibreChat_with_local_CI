@@ -170,8 +170,9 @@ class Tools:
 
                 encoded_filename = urllib.parse.quote(filename)
                 download_url = f"{base_url}/download/{session_id}/{encoded_filename}"
-                if self.valves.RCE_API_KEY:
-                    download_url += f"?api_key={self.valves.RCE_API_KEY}"
+                api_key = self.valves.RCE_API_KEY or "your_secret_key"
+                if api_key:
+                    download_url += f"?api_key={api_key}"
                 browser_url = download_url.replace("host.docker.internal", "localhost")
 
                 if filename.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
