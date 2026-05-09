@@ -45,7 +45,7 @@ It is compatible with both cloud-based providers (Gemini, OpenAI, etc.) and loca
 
 3.  **Start Services**:
     ```bash
-    docker compose -f docker-compose.yml -f docker-compose.full.yml up -d
+    docker compose -f docker-compose.yml -f docker-compose.librechat.yml up -d
     ```
 
 ### B. Standalone API Deployment (Integration with existing LibreChat)
@@ -55,6 +55,10 @@ docker build -f Dockerfile.rce -t custom-rce-kernel:latest .
 docker compose up -d --build
 ```
 Configure `LIBRECHAT_CODE_BASEURL` and `LIBRECHAT_CODE_API_KEY` in your LibreChat's `.env`.
+
+### C. Open WebUI Integration
+
+Tools and instructions for using this Code Interpreter with Open WebUI are available. See [open_webui_integration/README_OpenWebUI.md](./open_webui_integration/README_OpenWebUI.md) for details.
 
 ---
 

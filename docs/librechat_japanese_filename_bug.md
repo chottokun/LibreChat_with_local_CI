@@ -1,81 +1,79 @@
-# Bug Report: LibreChat 日本語ファイル名の文字化け
+# Bug Report: LibreChat 日本語ファイル名の文字化け (Issue #8792)
 
 ## 1. 概要
 
-LibreChatのファイルアップロード処理において、非ASCII文字（日本語、中国語等）を含むファイル名がアンダースコア（`_`）に置換される問題が存在する。
+LibreChatにおいて、非ASCII文字（日本語、中国語等）を含むファイル名をアップロードすると、ファイル名がアンダースコア（`_`）に置換されたり、文字化け（Mojibake）が発生したりする問題。
 
-- **上流Issue**: [danny-avila/LibreChat#8792](https://github.com/danny-avila/LibreChat/issues/8792)
-- **報告日**: 2025-08-01
-- **ステータス**: 未修正（2026-02-26時点）
-- **影響バージョン**: v0.7.9以降（v0.8.2でも未修正）
+- **上流Issue**: [danny-avila/LibreChat#8792](https://github.com/danny-avila/LibreChat/issues/8792), [#10276](https://github.com/danny-avila/LibreChat/issues/10276)
+- **ステータス**: 上流では「Not Planned」としてクローズ（2025-08時点）。本プロジェクト（RCE）側は対応済み。
 
 ## 2. 症状
 
 | 操作 | 結果 |
 |---|---|
-| ブラウザからファイル送信 | `テスト.txt` → 正しいUTF-8エンコードで送信される |
-| LibreChat Node.js バックエンド受信 | ファイル名が `___.txt` に変換される |
-| code-interpreter-api 受信 | 変換後の `___.txt` しか届かない |
-| ファイルマネージャー表示 | DBにUTF-8名が保存されているため正しく表示される場合がある |
+| ブラウザからファイル送信 | `テスト.txt` → UTF-8で送信されるが、バックエンドで `___.txt` または `æè¨.txt` になる |
+| LibreChat バックエンド | `multer` がLatin1として解釈し、サニタイズ処理でアンダースコアに置換する |
+| code-interpreter-api (RCE) | 変換後の名前（`___.txt`等）を受信し、そのまま処理される |
+| RAG / 検索機能 | メタデータが文字化けしているため、検索精度が著しく低下する |
 
-### 追加リスク
+## 3. 技術的背景と原因解析
 
-同じバイト長の日本語ファイル名が同一の `___...` パターンに変換されるため、ファイルの上書きが発生する可能性がある。
+### エンコーディングの不整合
+LibreChatのファイルアップロードは `multer` ミドルウェアに依存しています。`multer` が内部で使用する `busboy` は、HTTPヘッダーのデフォルトエンコーディングとして **ISO-8859-1 (Latin1)** を想定する歴史的な制約があります。
 
-例:
-- `販売データ_今週.pdf` → `__________.pdf`
-- `販売データ_先週.pdf` → `__________.pdf` （上書き）
+1. **ブラウザ**: `資料.pdf` を UTF-8 (6バイト: `0xE8 0xB3 0x87 0xE6 0x96 0x99`) で送信。
+2. **サーバー (multer)**: これを Latin1 として解釈し、シングルバイト文字の羅列として認識。
+3. **結果**: 「資料」が「æè¨」のような不正な文字列に変換され、ファイルシステムに保存されます。
 
-## 3. 原因
+### サニタイズロジック
+LibreChatのバックエンドは、セキュリティ上の理由から非ASCII文字をアンダースコアに置換する処理を行っており、これが日本語ファイル名を一律で破壊する直接的な原因となっています。
 
-LibreChatの Node.js バックエンド（`/api/files` エンドポイント）において、`multer` 等のファイルアップロードミドルウェアが非ASCII文字をアンダースコアに置換するサニタイズ処理を行っている。
+## 4. 推奨される対策（上流/暫定パッチ）
 
-### データフロー
+上流のコードを修正する場合、以下の2段階の対策が有効です。
 
+### A. アップロード時のエンコーディング復元
+`multer` が誤って Latin1 として解釈した文字列を、一度バイナリ（Buffer）に戻してから UTF-8 でデコードし直します。
+
+```javascript
+// api/server/routes/files/multer.js 等
+file.originalname = Buffer.from(file.originalname, 'latin1').toString('utf8');
 ```
-ブラウザ (テスト.txt) → POST /api/files → LibreChat Node.js (サニタイズ → ___.txt) → POST /upload → code-interpreter-api (___.txt を受信)
+
+### B. ダウンロード時の RFC 5987 準拠
+ブラウザが正しく名前を認識できるように、`Content-Disposition` ヘッダーで `filename*` パラメータを使用します。
+
+```javascript
+const encodedFilename = encodeURIComponent(filename);
+res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodedFilename}`);
 ```
 
-## 4. 本プロジェクトでの対応状況
+## 5. セキュリティ上の懸念事項
+
+ファイル名操作ロジックを変更する際は、以下の脆弱性に厳重に注意する必要があります。
+
+- **パス・トラバーサル (Path Traversal)**: エンコーディング変換の過程で `../` などのディレクトリ区切り文字が混入するリスク。
+  - **対策**: 変換後のファイル名に対し、必ず `path.basename()` を適用し、ディレクトリ境界を検証する。
+- **脆弱性IDの例**: GHSA-qrm5-r67f-6692, GHSA-mq4w-5hp5-6g52, CVE-2024-11170。これらはファイル名サニタイズの不備を突いたものです。
+
+## 6. RAG（検索拡張生成）への影響
+
+ファイル名の文字化けは、RAGシステムの信頼性を直接損ないます。
+- **メタデータ精度**: 「2024年度予算案.pdf」が正しく保持されていれば検索可能ですが、文字化けしていると検索対象から漏れます。
+- **引用（Citations）**: AIが回答の根拠を示す際、元のファイル名が壊れているとユーザーがソースを確認できなくなります。
+
+## 7. 本プロジェクト（RCE）での対応状況
 
 ### 対応済み（PR #64）
+`code-interpreter-api` 側は、日本語ファイル名を正しく処理できるように以下の対応を完了しています。
 
-code-interpreter-api 側は日本語ファイル名を正しく処理できるように対応済み:
+- **Docker環境**: UTF-8ロケール設定（`LANG=C.UTF-8`, `LC_ALL=C.UTF-8`, `PYTHONUTF8=1`）。
+- **ファイル一覧取得**: `ls` コマンドではなく Python の `os.listdir` を使用し、文字化けを回避。
+- **ダウンロードヘッダー**: RFC 5987準拠の `Content-Disposition` ヘッダーを生成。
 
-- **Dockerfiles**: UTF-8ロケール設定（`LANG=C.UTF-8`, `LC_ALL=C.UTF-8`, `PYTHONUTF8=1`）
-- **main.py `list_files`**: `ls -1` → `python3 os.listdir` に変更（ロケール依存のエスケープ回避）
-- **main.py `download_session_file`**: RFC 5987準拠の `Content-Disposition` ヘッダー生成
-- **セキュリティ修正**: HTTPヘッダーインジェクション対策
+### 現状の制約
+RCE側が対応していても、LibreChat本体が送信前に名前を `___...` に書き換えてしまうため、システム全体としては依然として上流の修正（または独自のパッチ適用）が必要な状態です。
 
-### 未対応（LibreChat上流の修正が必要）
+## 8. 結論と今後の展望
 
-- LibreChat Node.js バックエンドのファイル名サニタイズロジック
-- 修正箇所の候補: LibreChatの `api/server/services/Files/` 配下
-
-## 5. 検証コマンド
-
-```bash
-# API直接テスト（日本語ファイル名が正しく処理されることを確認）
-curl -X POST http://localhost:8000/upload \
-  -H "X-API-Key: replace_with_a_secure_key" \
-  -F "entity_id=test-session" \
-  -F "files=@テスト.txt;filename=テスト.txt"
-
-# ファイル一覧確認
-curl http://localhost:8000/files/test-session \
-  -H "X-API-Key: replace_with_a_secure_key"
-
-# ダウンロードヘッダー確認（filename* にUTF-8エンコード名が含まれること）
-curl -v "http://localhost:8000/download?session_id=test-session&filename=<file_id>&api_key=replace_with_a_secure_key" 2>&1 | grep Content-Disposition
-```
-
-## 6. 将来の修正方針
-
-LibreChat上流で Issue #8792 が修正された場合、以下の手順で検証する:
-
-1. LibreChatのDockerイメージを最新版に更新
-2. 日本語ファイル名のアップロードをUI経由で実行
-3. code-interpreter-api のログで受信ファイル名を確認
-4. ダウンロード時のファイル名が正しいことを確認
-
-code-interpreter-api 側は既に対応済みのため、追加修正は不要のはず。
+Issue #8792 は典型的なエンコーディングのギャップに起因する課題です。将来的には、物理ファイル名をUUID等のユニークIDで管理し、元の日本語名はデータベース上のメタデータとして保持するアーキテクチャへの移行が、最も堅牢な解決策となります。

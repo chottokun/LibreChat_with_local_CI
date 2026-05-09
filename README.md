@@ -45,7 +45,7 @@ LibreChatにコード実行機能を提供する、サンドボックス型のCo
 
 3.  **起動**:
     ```bash
-    docker compose -f docker-compose.yml -f docker-compose.full.yml up -d
+    docker compose -f docker-compose.yml -f docker-compose.librechat.yml up -d
     ```
 
 ### B. API単体での起動 (既存のLibreChatと連携)
@@ -55,6 +55,10 @@ docker build -f Dockerfile.rce -t custom-rce-kernel:latest .
 docker compose up -d --build
 ```
 LibreChat側の `.env` で `LIBRECHAT_CODE_BASEURL` と `LIBRECHAT_CODE_API_KEY` を設定してください。
+
+### C. Open WebUI 統合
+
+Open WebUIから本Code Interpreterを利用するためのツールと手順を用意しています。詳細は [open_webui_integration/README_OpenWebUI.md](./open_webui_integration/README_OpenWebUI.md) を参照してください。
 
 ---
 
