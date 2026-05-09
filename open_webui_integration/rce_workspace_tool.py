@@ -12,6 +12,7 @@ import httpx
 import base64
 import json
 import logging
+import urllib.parse
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +168,8 @@ class Tools:
                 if not filename:
                     continue
 
-                download_url = f"{base_url}/download/{session_id}/{file_id}"
+                encoded_filename = urllib.parse.quote(filename)
+                download_url = f"{base_url}/download/{session_id}/{encoded_filename}"
                 if self.valves.RCE_API_KEY:
                     download_url += f"?api_key={self.valves.RCE_API_KEY}"
                 browser_url = download_url.replace("host.docker.internal", "localhost")
