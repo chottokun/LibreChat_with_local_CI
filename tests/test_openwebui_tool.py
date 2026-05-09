@@ -181,6 +181,5 @@ async def test_get_available_packages():
         
         assert "pandas" in result
         assert "numpy" in result
-        mock_post.assert_called_once()
 
 

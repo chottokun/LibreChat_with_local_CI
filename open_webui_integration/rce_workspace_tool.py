@@ -191,30 +191,15 @@ class Tools:
         :param __chat_id__: Direct chat ID injected by Open WebUI.
         :return: List of pre-installed Python packages.
         """
-        session_id = __chat_id__ or __metadata__.get("chat_id", "default_session")
-        base_url = self.valves.RCE_API_BASE_URL.rstrip("/")
-        headers = {"X-Api-Key": self.valves.RCE_API_KEY} if self.valves.RCE_API_KEY else {}
-        
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            exec_url = f"{base_url}/exec"
-            payload = {
-                "session_id": session_id,
-                "code": "import sys; import subprocess; print(subprocess.check_output([sys.executable, '-m', 'pip', 'list']).decode())"
-            }
-            try:
-                response = await client.post(exec_url, json=payload, headers=headers)
-                response.raise_for_status()
-                result_data = response.json()
-                return result_data.get("stdout", "Unable to list packages.")
-            except Exception as e:
-                return (
-                    "Core pre-installed packages:\n"
-                    "- pandas\n"
-                    "- numpy\n"
-                    "- scipy\n"
-                    "- matplotlib\n"
-                    "- japanize-matplotlib\n"
-                    "- seaborn\n"
-                    f"(Fallback active due to connection error: {e})"
-                )
+        return (
+            "The following core data science and visualization packages are pre-installed and ready to use in the Code Interpreter:\n\n"
+            "- pandas\n"
+            "- numpy\n"
+            "- scipy\n"
+            "- matplotlib\n"
+            "- japanize-matplotlib (ALWAYS import this when generating plots with Japanese text)\n"
+            "- seaborn\n\n"
+            "Note: All built-in Python 3.11 standard libraries (e.g., math, datetime, os, json, sqlite3) are also available.\n"
+            "You do NOT need to install these packages using pip. Simply import them directly in your code."
+        )
 
