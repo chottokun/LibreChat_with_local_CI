@@ -152,27 +152,45 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import ASGIApp, Scope, Receive, Send
 
-class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    """Add security headers to all responses except download endpoints."""
-    async def dispatch(self, request, call_next):
-        response = await call_next(request)
-        if not request.url.path.startswith(("/download", "/api/files/code/download", "/run/download")):
-            response.headers["Content-Security-Policy"] = "default-src 'self'; frame-ancestors 'none';"
-            response.headers["X-Content-Type-Options"] = "nosniff"
-            response.headers["X-Frame-Options"] = "DENY"
-            response.headers["X-XSS-Protection"] = "1; mode=block"
-            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-            response.headers["Referrer-Policy"] = "no-referrer"
-        return response
+class SecurityHeadersCORSMiddleware(CORSMiddleware):
+    """
+    Extends CORSMiddleware to also add security headers on non-download responses.
+    This avoids the issue where @app.middleware('http') wraps CORSMiddleware
+    and prevents it from intercepting OPTIONS preflight requests.
+    """
+    SECURITY_DOWNLOAD_PREFIXES = ("/download", "/api/files/code/download", "/run/download")
 
-# Middleware execution order: outermost (first to run) -> innermost (last to run)
-# add_middleware uses LIFO stack: last added = outermost = runs first
-# So we add SecurityHeaders first (innermost), then CORS last (outermost)
-app.add_middleware(SecurityHeadersMiddleware)
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await super().__call__(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+        is_download = path.startswith(self.SECURITY_DOWNLOAD_PREFIXES)
+
+        if is_download:
+            # For download paths: just do CORS, no security headers
+            await super().__call__(scope, receive, send)
+        else:
+            # For non-download paths: do CORS + add security headers
+            async def send_with_security(message):
+                if message["type"] == "http.response.start":
+                    headers = list(message.get("headers", []))
+                    headers.extend([
+                        (b"x-content-type-options", b"nosniff"),
+                        (b"x-frame-options", b"DENY"),
+                        (b"x-xss-protection", b"1; mode=block"),
+                        (b"strict-transport-security", b"max-age=31536000; includeSubDomains"),
+                        (b"referrer-policy", b"no-referrer"),
+                    ])
+                    message["headers"] = headers
+                await send(message)
+            await super().__call__(scope, receive, send_with_security)
+
 app.add_middleware(
-    CORSMiddleware,
+    SecurityHeadersCORSMiddleware,
     allow_origin_regex="https?://.*",
     allow_credentials=True,
     allow_methods=["*"],
