@@ -152,6 +152,25 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Add security headers to all responses except download endpoints."""
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        if not request.url.path.startswith(("/download", "/api/files/code/download", "/run/download")):
+            response.headers["Content-Security-Policy"] = "default-src 'self'; frame-ancestors 'none';"
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["X-Frame-Options"] = "DENY"
+            response.headers["X-XSS-Protection"] = "1; mode=block"
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+            response.headers["Referrer-Policy"] = "no-referrer"
+        return response
+
+# Middleware execution order: outermost (first to run) -> innermost (last to run)
+# add_middleware uses LIFO stack: last added = outermost = runs first
+# So we add SecurityHeaders first (innermost), then CORS last (outermost)
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex="https?://.*",
@@ -160,18 +179,6 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["Content-Disposition"],
 )
-
-@app.middleware("http")
-async def add_security_headers(request, call_next):
-    response = await call_next(request)
-    if not request.url.path.startswith(("/download", "/api/files/code/download", "/run/download")):
-        response.headers["Content-Security-Policy"] = "default-src 'self'; frame-ancestors 'none';"
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
-        response.headers["X-XSS-Protection"] = "1; mode=block"
-        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-        response.headers["Referrer-Policy"] = "no-referrer"
-    return response
 
 DOCKER_CLIENT = docker.from_env()
 RCE_IMAGE_NAME = os.environ.get("RCE_IMAGE_NAME", "custom-rce-kernel:latest")
