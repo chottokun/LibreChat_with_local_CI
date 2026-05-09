@@ -157,3 +157,30 @@ async def test_execute_code_with_files_by_path():
         assert upload_call[0][0] == "http://localhost:8000/upload"
         assert upload_call[1]["params"]["session_id"] == "test-session-file-path"
 
+
+@pytest.mark.asyncio
+async def test_get_available_packages():
+    tool = Tools()
+    tool.valves.RCE_API_BASE_URL = "http://localhost:8000"
+    
+    metadata = {"chat_id": "test-session-packages"}
+    
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "stdout": "pandas (2.0.0)\nnumpy (1.24.0)\n",
+        "stderr": "",
+        "result": None,
+        "files": []
+    }
+    
+    with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = mock_response
+        
+        result = await tool.get_available_packages(__metadata__=metadata)
+        
+        assert "pandas" in result
+        assert "numpy" in result
+        mock_post.assert_called_once()
+
+
