@@ -169,7 +169,7 @@ class Tools:
                     continue
 
                 encoded_filename = urllib.parse.quote(filename)
-                base_download_url = f"{base_url}/download/{session_id}/{encoded_filename}".replace("host.docker.internal", "localhost")
+                base_download_url = f"{base_url}/download/{session_id}/{encoded_filename}".replace("host.docker.internal", "127.0.0.1")
                 api_key = self.valves.RCE_API_KEY or "your_secret_key"
 
                 if filename.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
