@@ -848,9 +848,12 @@ async def download_session_file(
         raise HTTPException(status_code=500, detail="Internal server error during file download")
 
     # Guess MIME type
-    mime_type, _ = mimetypes.guess_type(real_filename)
-    if not mime_type:
-        mime_type = "application/octet-stream"
+    if real_filename.lower().endswith(".csv"):
+        mime_type = "text/csv"
+    else:
+        mime_type, _ = mimetypes.guess_type(real_filename)
+        if not mime_type:
+            mime_type = "application/octet-stream"
 
     # Use inline for images and PDFs to allow them to be displayed in the chat interface
     disposition = "inline" if mime_type.startswith(("image/", "application/pdf")) else "attachment"
