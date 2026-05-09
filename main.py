@@ -9,7 +9,7 @@ import time
 import asyncio
 import string
 import secrets
-from fastapi import FastAPI, HTTPException, Security, UploadFile, File, Form, Query, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Security, UploadFile, File, Form, Query, BackgroundTasks, Response
 from contextlib import asynccontextmanager
 from fastapi.security import APIKeyHeader
 from fastapi.responses import FileResponse
@@ -850,6 +850,7 @@ async def download_session_file(
         real_filename = os.path.basename(real_filename)
     
     # Determine the file path if volume mounting is enabled
+    in_memory_content = None
     try:
         if RCE_DATA_DIR_HOST:
             session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, real_session_id)
@@ -857,15 +858,9 @@ async def download_session_file(
             if not os.path.exists(filepath):
                  raise HTTPException(status_code=404, detail="File not found")
             tmp_filepath = filepath
-            cleanup_needed = False
         else:
             # Fallback to Docker API (get_archive)
-            content, mtime = kernel_manager.download_file(real_session_id, real_filename)
-            # Create a secure temporary file
-            with tempfile.NamedTemporaryFile(delete=False) as tmp:
-                tmp.write(content)
-                tmp_filepath = tmp.name
-            cleanup_needed = True
+            in_memory_content, mtime = kernel_manager.download_file(real_session_id, real_filename)
     except HTTPException:
         raise
     except Exception as e:
@@ -882,10 +877,6 @@ async def download_session_file(
 
     # Use inline for images and PDFs to allow them to be displayed in the chat interface
     disposition = "inline" if mime_type.startswith(("image/", "application/pdf")) else "attachment"
-    
-    # Ensure temporary file is deleted if it was created
-    if cleanup_needed:
-        background_tasks.add_task(os.remove, tmp_filepath)
 
     # Manually construct Content-Disposition header to ensure maximum compatibility with Japanese filenames.
     # Starlette's default FileResponse might not always provide the filename="..." fallback correctly for non-ASCII.
@@ -895,6 +886,13 @@ async def download_session_file(
     headers = {
         "Content-Disposition": f"{disposition}; filename=\"{safe_filename_ascii}\"; filename*=utf-8''{filename_encoded}"
     }
+
+    if in_memory_content is not None:
+        return Response(
+            content=in_memory_content,
+            media_type=mime_type,
+            headers=headers
+        )
 
     return FileResponse(
         path=tmp_filepath,
