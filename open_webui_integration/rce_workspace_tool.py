@@ -2,8 +2,8 @@
 title: Code Interpreter
 author: Chottokun
 author_url: 
-description: Execute Python code securely, analyze data, and generate high-quality visual charts or plots.
-version: 1.0.0
+description: Execute Python code in a secure Docker sandbox. Analyzes data, generates plots (PNG), and produces downloadable files (CSV, etc.). Images are displayed inline; CSV files open as plain text in a new browser tab (save with Ctrl+S).
+version: 1.1.0
 """
 
 from pydantic import BaseModel, Field
@@ -38,23 +38,47 @@ class Tools:
         __chat_id__: Optional[str] = None,
     ) -> str:
         """
-        Execute Python code in a secure sandboxed environment.
-        You can use this to perform data analysis, generate plots, or run complex calculations.
-        
-        CRITICAL: All files uploaded/attached by the user in the chat (e.g., CSV, Excel, images) are AUTOMATICALLY uploaded to your sandbox's current directory ('.') before your code runs. 
-        You do NOT need to ask the user to upload them or upload them yourself. 
-        Simply read them directly using their filenames (e.g., `pd.read_csv('store_sales.csv')`).
-        
-        CRITICAL: To display the generated images (plots) and download files to the user, you MUST copy and include the exact Markdown image and download links (e.g., `![filename.png](http://localhost:8000/download/...)`) provided in the tool's output inside your final response. Do not modify the URLs.
-        
-        To check what files are available in the workspace, run: `import os; print(os.listdir('.'))`
-        IMPORTANT: When generating plots with matplotlib, ALWAYS use `plt.savefig('output.png')`. Do NOT use `plt.show()`, `IPython.display`, or `PIL.Image.show()`. Doing so will cause errors. To render Japanese characters correctly in matplotlib plots, ALWAYS write `import japanize_matplotlib` at the top of your code.
-        Any file saved to disk (such as `.png`, `.jpg`, `.csv`) is AUTOMATICALLY detected, uploaded, and returned as download/display links in the tool output.
+        Execute Python code in a secure Docker-sandboxed environment.
+        Use this for data analysis, generating plots/charts, running calculations, and producing output files.
+
+        ## File Input (Automatic)
+        - All files the user uploaded/attached in the chat (CSV, Excel, images, etc.) are AUTOMATICALLY
+          placed in the sandbox's current directory ('.') BEFORE your code runs.
+        - Do NOT ask the user to re-upload. Simply read them by filename: `pd.read_csv('data.csv')`.
+        - To list available files: `import os; print(os.listdir('.'))`
+
+        ## File Output (Automatic)
+        - Any file your code saves to disk (`.png`, `.csv`, `.xlsx`, etc.) is AUTOMATICALLY detected
+          and returned in the tool output as ready-to-use Markdown links.
+        - You MUST copy these exact Markdown links into your final response WITHOUT modifying the URLs.
+
+        ## Image Display Rules
+        - Images (PNG/JPG/GIF/WebP) are rendered inline via `![filename](http://...)` Markdown.
+        - ALWAYS use `plt.savefig('output.png')`. NEVER use `plt.show()` or `IPython.display`.
+        - For Japanese text in matplotlib: ALWAYS add `import japanize_matplotlib` at the top.
+
+        ## CSV / Non-Image File Download Rules
+        - CSV files are served as inline plain text (`text/plain`) to bypass browser security restrictions
+          on HTTP file downloads. When the user opens the link, the CSV content is displayed as text
+          in the browser tab.
+        - IMPORTANT: When presenting CSV download links to the user, ALWAYS instruct them:
+          「リンクを右クリックして『新しいタブで開く』を選択してください。
+          ブラウザにCSVの内容がテキストとして表示されますので、Ctrl+S で保存してください。」
+          (Right-click the link and select 'Open in new tab'. The CSV content will appear as text.
+          Press Ctrl+S to save it.)
+        - Do NOT tell users to left-click download links directly, as Open WebUI's SvelteKit router
+          will intercept the click and cause an error page.
+
+        ## Session & Persistence
+        - Each chat_id maps to a dedicated Docker container (sandbox). Files persist within the
+          same chat session but are lost when the API container restarts.
+        - The sandbox has a 300-second execution timeout.
+
         :param code: The Python code to execute.
         :param __metadata__: Metadata containing chat_id for session management.
         :param __files__: List of files uploaded in the chat.
         :param __chat_id__: Direct chat ID injected by Open WebUI.
-        :return: Execution results (stdout/stderr) and Markdown for generated files.
+        :return: Execution results (stdout/stderr) and Markdown links for generated files.
         """
         session_id = __chat_id__ or __metadata__.get("chat_id", "default_session")
         base_url = self.valves.RCE_API_BASE_URL.rstrip("/")
