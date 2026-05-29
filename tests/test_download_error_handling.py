@@ -60,8 +60,8 @@ def test_download_file_docker_malformed_tar(kernel_manager):
     with patch("main.RCE_DATA_DIR_HOST", None):
         with pytest.raises(HTTPException) as excinfo:
             kernel_manager.download_file(session_id, filename)
-        assert excinfo.value.status_code == 404
-        assert excinfo.value.detail == "File not found"
+        assert excinfo.value.status_code == 500
+        assert excinfo.value.detail == "Internal server error during file download"
 
 def test_download_file_docker_generator_failure(kernel_manager):
     """Test when the generator returned by get_archive raises an exception."""
@@ -79,8 +79,8 @@ def test_download_file_docker_generator_failure(kernel_manager):
     with patch("main.RCE_DATA_DIR_HOST", None):
         with pytest.raises(HTTPException) as excinfo:
             kernel_manager.download_file(session_id, filename)
-        assert excinfo.value.status_code == 404
-        assert excinfo.value.detail == "File not found"
+        assert excinfo.value.status_code == 500
+        assert excinfo.value.detail == "Internal server error during file download"
 
 def test_download_file_docker_unexpected_error_during_processing(kernel_manager):
     """Test any other unexpected error during tar processing."""
@@ -102,8 +102,8 @@ def test_download_file_docker_unexpected_error_during_processing(kernel_manager)
          patch("tarfile.open", side_effect=RuntimeError("Unexpected tar error")):
         with pytest.raises(HTTPException) as excinfo:
             kernel_manager.download_file(session_id, filename)
-        assert excinfo.value.status_code == 404
-        assert excinfo.value.detail == "File not found"
+        assert excinfo.value.status_code == 500
+        assert excinfo.value.detail == "Internal server error during file download"
 
 @patch("main.kernel_manager.download_file")
 def test_download_endpoint_generic_exception(mock_download):
