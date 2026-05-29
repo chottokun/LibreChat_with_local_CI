@@ -50,13 +50,13 @@ def test_execute_code_retry_on_not_found(kernel_manager):
     # First call to _execute_in_container fails with NotFound
     # Second call (retry) succeeds
     with patch.object(kernel_manager, '_execute_in_container', side_effect=[NotFound("gone"), mock_res]) as mock_exec:
-        result = kernel_manager.execute_code(session_id, code)
+        result = kernel_manager.execute_code(session_id, code, external_session_id="ext-sid")
 
         assert result["stdout"] == "retry success\n"
         assert mock_exec.call_count == 2
 
         # Verify get_or_create_container was called with force_refresh=True for retry
-        kernel_manager.get_or_create_container.assert_any_call(session_id, force_refresh=True)
+        kernel_manager.get_or_create_container.assert_any_call(session_id, force_refresh=True, external_session_id="ext-sid")
 
         # Verify cleanup on second container
         mock_container2.exec_run.assert_called_with(cmd=["rm", ANY])
