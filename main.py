@@ -337,6 +337,14 @@ class KernelManager:
                 logger.error("Error in cleanup loop: %s", e)
             await asyncio.sleep(60) # Run every minute
 
+    def _put_archive_with_retry(self, session_id: str, container, path: str, data: bytes, external_session_id: Optional[str] = None):
+        try:
+            container.put_archive(path, data)
+        except (docker.errors.APIError, docker.errors.NotFound):
+            # Recovery: Force refresh and retry once
+            container = self.get_or_create_container(session_id, force_refresh=True, external_session_id=external_session_id)
+            container.put_archive(path, data)
+
     def upload_file(self, session_id: str, filename: str, content: bytes, external_session_id: Optional[str] = None):
         # Sanitize filename to prevent path traversal
         safe_filename = os.path.basename(filename)
@@ -359,7 +367,7 @@ class KernelManager:
                 tar_info.size = len(content)
                 tar.addfile(tar_info, io.BytesIO(content))
 
-            container.put_archive("/mnt/data", tar_stream.getvalue())
+            self._put_archive_with_retry(session_id, container, "/mnt/data", tar_stream.getvalue(), external_session_id)
             logger.info("Uploaded file %s to session %s via put_archive", safe_filename, session_id)
 
     def download_file(self, session_id: str, filename: str):
@@ -400,14 +408,18 @@ class KernelManager:
                 logger.error("Failed to download file %s from session %s: %s", filename, session_id, e)
                 raise HTTPException(status_code=500, detail="Internal server error during file download")
 
-    def list_files(self, session_id: str):
-        container = self.get_or_create_container(session_id)
+    def list_files(self, session_id: str, external_session_id: Optional[str] = None):
+        container = self.get_or_create_container(session_id, external_session_id=external_session_id)
         # Use python to list files to avoid locale-dependent 'ls' formatting/escaping issues.
         # We use JSON for robust transmission of filenames that might contain spaces or special chars.
-        res = container.exec_run(
-            cmd=["python3", "-c", "import os, json; print(json.dumps(os.listdir('/mnt/data')))"],
-            demux=True
-        )
+        cmd = ["python3", "-c", "import os, json; print(json.dumps(os.listdir('/mnt/data')))"]
+
+        try:
+            res = container.exec_run(cmd=cmd, demux=True)
+        except (docker.errors.APIError, docker.errors.NotFound):
+            container = self.get_or_create_container(session_id, force_refresh=True, external_session_id=external_session_id)
+            res = container.exec_run(cmd=cmd, demux=True)
+
         if res.exit_code == 0:
             stdout, stderr = res.output
             output = stdout.decode('utf-8') if stdout else ""
@@ -618,24 +630,32 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
     result = kernel_manager.execute_code(real_session_id, req.code, lang=(req.lang or "python").lower(), external_session_id=nanoid_session)
     
     # List generated files and format them for LibreChat native ingestion
-    current_files = kernel_manager.list_files(real_session_id)
+    current_files = kernel_manager.list_files(real_session_id, external_session_id=nanoid_session)
     structured_files = []
     
     # Initialize file mapping for this session
     with kernel_manager.lock:
         if nanoid_session not in kernel_manager.file_id_map:
             kernel_manager.file_id_map[nanoid_session] = {}
+        # Pre-calculate reverse mapping once to avoid O(N^2) inside the loop
+        existing_filenames_to_ids = {v: k for k, v in kernel_manager.file_id_map[nanoid_session].items()}
     
     for f in current_files:
         mime_type, _ = mimetypes.guess_type(f)
         # Generate or reuse nanoid for this file
-        with kernel_manager.lock:
-            existing_ids = {v: k for k, v in kernel_manager.file_id_map[nanoid_session].items()}
-            if f in existing_ids:
-                nanoid_file = existing_ids[f]
-            else:
-                nanoid_file = generate_nanoid()
-                kernel_manager.file_id_map[nanoid_session][nanoid_file] = f
+        if f in existing_filenames_to_ids:
+            nanoid_file = existing_filenames_to_ids[f]
+        else:
+            with kernel_manager.lock:
+                # Double-check inside lock to prevent duplicates
+                current_rev_map = {v: k for k, v in kernel_manager.file_id_map[nanoid_session].items()}
+                if f in current_rev_map:
+                    nanoid_file = current_rev_map[f]
+                else:
+                    nanoid_file = generate_nanoid()
+                    kernel_manager.file_id_map[nanoid_session][nanoid_file] = f
+                existing_filenames_to_ids[f] = nanoid_file
+
         structured_files.append({
             "id": nanoid_file,
             "name": f,
@@ -749,8 +769,13 @@ async def list_session_files(session_id: str, key: str = Security(get_api_key)):
     """
     Lists files in a session's sandbox.
     """
-    real_session_id = kernel_manager.resolve_session_id(sanitize_id(session_id))
-    files = kernel_manager.list_files(real_session_id)
+    s_sid = sanitize_id(session_id)
+    real_session_id = kernel_manager.resolve_session_id(s_sid)
+
+    with kernel_manager.lock:
+        nanoid_session = kernel_manager.session_to_nanoid.get(real_session_id, s_sid)
+
+    files = kernel_manager.list_files(real_session_id, external_session_id=nanoid_session)
     
     file_list = []
     nanoid_session = kernel_manager.session_to_nanoid.get(real_session_id, sanitize_id(session_id))

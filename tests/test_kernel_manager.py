@@ -125,7 +125,7 @@ def test_list_files_success(kernel_manager):
 
     # Assert
     assert files == ["file1.txt", "file2.py"]
-    kernel_manager.get_or_create_container.assert_called_once_with(session_id)
+    kernel_manager.get_or_create_container.assert_called_once_with(session_id, external_session_id=None)
     mock_container.exec_run.assert_called_once_with(
         cmd=["python3", "-c", "import os, json; print(json.dumps(os.listdir('/mnt/data')))"],
         demux=True
@@ -147,7 +147,7 @@ def test_list_files_failure(kernel_manager):
 
     # Assert
     assert files == []
-    kernel_manager.get_or_create_container.assert_called_once_with(session_id)
+    kernel_manager.get_or_create_container.assert_called_once_with(session_id, external_session_id=None)
     mock_container.exec_run.assert_called_once()
 
 def test_recover_containers_success(kernel_manager):
