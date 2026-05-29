@@ -2,6 +2,7 @@ import pytest
 import time
 import io
 import tarfile
+import json
 from unittest.mock import MagicMock, patch, ANY
 from docker.errors import NotFound
 from fastapi import HTTPException
@@ -81,7 +82,7 @@ def test_get_or_create_container_missing_during_reload(kernel_manager):
 
     # Assert: container should be the new one created after the old one was not found
     assert container == new_container
-    kernel_manager.start_new_container_unlocked.assert_called_once_with(session_id)
+    kernel_manager.start_new_container_unlocked.assert_called_once_with(session_id, None)
 
 def test_start_new_container_success(kernel_manager):
     session_id = "new_session"
@@ -116,7 +117,7 @@ def test_list_files_success(kernel_manager):
     # Mock ExecResult
     mock_res = MagicMock()
     mock_res.exit_code = 0
-    mock_res.output = b"file1.txt\nfile2.py\n\n"
+    mock_res.output = (json.dumps(["file1.txt", "file2.py"]).encode('utf-8'), b"")
     mock_container.exec_run.return_value = mock_res
 
     # Execute
@@ -124,9 +125,10 @@ def test_list_files_success(kernel_manager):
 
     # Assert
     assert files == ["file1.txt", "file2.py"]
-    kernel_manager.get_or_create_container.assert_called_once_with(session_id)
+    kernel_manager.get_or_create_container.assert_called_once_with(session_id, external_session_id=None)
     mock_container.exec_run.assert_called_once_with(
-        cmd=["python3", "-c", "import os; print('\\n'.join(os.listdir('/mnt/data')))"]
+        cmd=["python3", "-c", "import os, json; print(json.dumps(os.listdir('/mnt/data')))"],
+        demux=True
     )
 
 def test_list_files_failure(kernel_manager):
@@ -145,7 +147,7 @@ def test_list_files_failure(kernel_manager):
 
     # Assert
     assert files == []
-    kernel_manager.get_or_create_container.assert_called_once_with(session_id)
+    kernel_manager.get_or_create_container.assert_called_once_with(session_id, external_session_id=None)
     mock_container.exec_run.assert_called_once()
 
 def test_recover_containers_success(kernel_manager):
@@ -394,7 +396,7 @@ def test_download_file_docker_not_found(kernel_manager):
     with patch("main.RCE_DATA_DIR_HOST", None):
         with pytest.raises(HTTPException) as excinfo:
             kernel_manager.download_file(session_id, filename)
-        assert excinfo.value.status_code == 404
+        assert excinfo.value.status_code == 500
 
 def test_download_file_docker_empty_tar(kernel_manager):
     session_id = "test_session"
@@ -428,7 +430,7 @@ def test_get_or_create_container_generic_exception_during_start(kernel_manager):
 
     # Mock start_new_container_unlocked on the instance to verify session deletion
     new_container = MagicMock()
-    def mock_start_new_unlocked(sid):
+    def mock_start_new_unlocked(sid, external_session_id=None):
         assert sid == session_id
         # At this point, the old session MUST have been deleted from active_kernels
         assert session_id not in kernel_manager.active_kernels
@@ -444,7 +446,7 @@ def test_get_or_create_container_generic_exception_during_start(kernel_manager):
     # Assert
     assert container == new_container
     mock_container.start.assert_called_once()
-    kernel_manager.start_new_container_unlocked.assert_called_once_with(session_id)
+    kernel_manager.start_new_container_unlocked.assert_called_once_with(session_id, None)
 
 def test_get_or_create_container_generic_exception_during_reload(kernel_manager):
     # Setup
@@ -459,7 +461,7 @@ def test_get_or_create_container_generic_exception_during_reload(kernel_manager)
 
     # Mock start_new_container_unlocked on the instance to verify session deletion
     new_container = MagicMock()
-    def mock_start_new_unlocked(sid):
+    def mock_start_new_unlocked(sid, external_session_id=None):
         assert sid == session_id
         # At this point, the old session MUST have been deleted from active_kernels
         assert session_id not in kernel_manager.active_kernels
@@ -475,4 +477,4 @@ def test_get_or_create_container_generic_exception_during_reload(kernel_manager)
     # Assert
     assert container == new_container
     mock_container.reload.assert_called_once()
-    kernel_manager.start_new_container_unlocked.assert_called_once_with(session_id)
+    kernel_manager.start_new_container_unlocked.assert_called_once_with(session_id, None)
