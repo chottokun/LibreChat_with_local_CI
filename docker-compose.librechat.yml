@@ -37,7 +37,7 @@ services:
     container_name: librechat
     restart: always
     ports:
-      - "3080:3080"
+      - "3000:3080"
     depends_on:
       - mongodb
       - meilisearch
@@ -49,6 +49,8 @@ services:
       - CONFIG_PATH=${CONFIG_PATH:-/app/librechat.yaml}
       - LIBRECHAT_CODE_BASEURL=${LIBRECHAT_CODE_BASEURL:-http://librechat_code_interpreter_api:8000}
       - LIBRECHAT_CODE_API_KEY=${LIBRECHAT_CODE_API_KEY}
+      - CODE_API_KEY=${LIBRECHAT_CODE_API_KEY}
+      - SANDPACK_BUNDLER_URL=${SANDPACK_BUNDLER_URL:-http://localhost:8080}
       - CONFIG_BYPASS_VALIDATION=${CONFIG_BYPASS_VALIDATION:-true}
       - ALLOW_REGISTRATION=${ALLOW_REGISTRATION:-true}
       - ENDPOINTS=${ENDPOINTS}
@@ -69,6 +71,8 @@ services:
       - IMAGES_DIR=/app/api/data/images
     volumes:
       - ./librechat.yaml:/app/librechat.yaml
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - librechat-network
 
@@ -93,6 +97,18 @@ services:
   #     - ollama-data:/root/.ollama
   #   networks:
   #     - librechat-network
+
+  # ---------------------------------------------------------------------------
+  # Sandpack Bundler Service (For offline/local Artifacts rendering)
+  # ---------------------------------------------------------------------------
+  sandpack-bundler:
+    image: ghcr.io/librechat-ai/codesandbox-client/bundler:latest
+    container_name: sandpack-bundler
+    restart: always
+    ports:
+      - "8080:80"
+    networks:
+      - librechat-network
 
 networks:
   librechat-network:

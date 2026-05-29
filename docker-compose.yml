@@ -31,6 +31,7 @@ services:
       - "8000:8000"
     environment:
       - LIBRECHAT_CODE_API_KEY=${LIBRECHAT_CODE_API_KEY}
+      - DISABLE_CODE_API_AUTH=${DISABLE_CODE_API_AUTH:-false}
       - DOCKER_HOST=${DOCKER_HOST:-tcp://docker-proxy:2375}
       - RCE_IMAGE_NAME=${RCE_IMAGE_NAME:-custom-rce-kernel:latest}
       - RCE_NETWORK_ENABLED=${RCE_NETWORK_ENABLED:-false}

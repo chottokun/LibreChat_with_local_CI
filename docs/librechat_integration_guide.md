@@ -64,7 +64,13 @@ To make files appear as native, clickable attachment icons in the chat UI, your 
 - **Filename Sanitization**: LibreChat may sanitize filenames containing non-ASCII characters. Recent fixes in our custom API handle `Content-Disposition` labels correctly to restore the original filenames where possible (see `docs/librechat_japanese_filename_bug.md`).
 
 ### Maintenance
-- If files are not showing up or downloads still fail:
+- **Authentication Failures (401 Unauthorized)**:
+  If you see `Received key: None` in the API logs, LibreChat is failing to inject the API key header. Bypass this by setting `DISABLE_CODE_API_AUTH=true` in your `.env` for local network environments.
+- **Stateless Execution / Missing Session ID**:
+  When users run code without attaching files, the LibreChat client omits the `session_id`. Our custom API automatically mitigates this by binding to `user_<user_id>` or reusing the last uploaded file's session ID (cached for 5 minutes). No extra client configuration is needed.
+- **File Download & Native UI Attachment**:
+  If files are not showing up or downloads still fail:
   1. Clear browser cache (to reset the UI's internal blob state).
   2. Start a new chat session to reset the container state.
   3. Verify Docker volumes are correctly mounted at `/app/shared_volumes/sessions/`.
+

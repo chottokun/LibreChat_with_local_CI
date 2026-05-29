@@ -1,146 +1,118 @@
-RCEサンドボックス環境で利用できるライブラリを事前にインストールされたものに限定し、その設定を柔軟に制御したいというご要望は、セキュリティと運用の観点からベストプラクティスです。
+# RCEサンドボックス環境（Docker）のカスタム構築と動作設計ガイド
 
-これを実現する最も効果的な方法は、**RCEサンドボックスとして使用するDockerイメージを完全にカスタムビルド**し、そのイメージ内で利用可能なライブラリを`Dockerfile`で厳密に定義することです。
+本ドキュメントは、LibreChatに提供されるCode Interpreter API（Custom RCE）が、どのようにして隔離されたDockerサンドボックス環境を動的に管理し、セキュアかつ日本語に対応したコード実行を実現しているかを解説した技術ガイドです。
 
-以下に、このカスタムRCE環境の構築と、FastAPIゲートウェイとの連携方法を明確にします。
+---
 
------
+## 1. 隔離モデルの基本設計 (docker exec アプローチ)
 
-## I. RCEサンドボックス環境のカスタム構築 (Docker Image)
+本APIでは、Jupyter Kernelアプローチのような複雑な接続維持（ZMQポート管理等）を避け、シンプルで堅牢な **`docker exec` 実行モデル** を採用しています。
 
-この手順は、ユーザーコードが実行される隔離環境（サンドボックス）を作成するためのものであり、**セキュリティを担保する要**となります。利用したい任意のライブラリは、ここで定義します。
+* **常時稼働コンテナ**: 
+  セッションごとに起動されるDockerコンテナは、`tail -f /dev/null` をエントリポイントとしてバックグラウンドで常時起動状態を維持します。これにより、起動コストを最小限に抑えつつ、ファイルシステムの状態を保持します。
+* **動的実行**:
+  ユーザーから送信されたプログラムコードは、API（FastAPI）側で一時スクリプトファイルとしてパッケージ化（tarストリーム化）され、Docker API（`put_archive`）を介してコンテナ内の作業ディレクトリ `/mnt/data` へ安全に転送されます。その後、`docker exec` 相当の API（`exec_run`）によって指定言語のインタプリタ（Python, Bash, R）が動的に起動され、コードが実行されます。
+* **安全なファイル取得**:
+  実行後に生成されたファイルや標準出力は、再び Docker API またはボリュームマウント経由で API ゲートウェイに引き渡され、ユーザーへ安全に返送されます。
 
-### 1\. RCE環境の`Dockerfile`の準備
+---
 
-サンドボックスコンテナのベースイメージとして、Pythonの基本イメージを使用し、必要なライブラリを`pip`でインストールする手順を定義します。
+## 2. サンドボックス環境の構築 (`Dockerfile.rce`)
 
-| ファイル名 | 内容 | 備考 |
-|---|---|---|
-| `rce_requirements.txt` | `pandas`<br>`numpy`<br>`scipy`<br>`matplotlib`<br>`ipykernel` | **利用したい任意のライブラリ**を記述します。Jupyter Kernelアプローチでは、カーネル機能のために`ipykernel`が必須です [1]。 |
-| `Dockerfile.rce` | 以下の手順を参照 | RCEコンテナイメージのビルド定義ファイル。 |
+ユーザーのコードが実行される隔離環境（サンドボックス）の設計図です。セキュリティの最小特権原則と、日本語ファイル名および日本語のグラフ描画に対応するための最適化が施されています。
 
-**`Dockerfile.rce` の内容**
+### `Dockerfile.rce` の設計と役割
 
 ```dockerfile
-# 1. ベースイメージ: Pythonの軽量な環境を選択
 FROM python:3.11-slim
 
-# 2. 作業ディレクトリを定義
+# 1. 日本語ファイル名およびUTF-8入出力の完全サポート
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+ENV PYTHONUTF8=1
+
+# 2. 最小特権原則に基づく非ルートユーザーの作成
+RUN groupadd -g 1000 sandboxuser && \
+    useradd -m -u 1000 -g sandboxuser sandboxuser
+
 WORKDIR /usr/src/app
 
-# 3. RCE環境で利用したいライブラリをインストール
-# rce_requirements.txtをコピーし、pipでインストール
-COPY rce_requirements.txt.
-RUN pip install --no-cache-dir -r rce_requirements.txt 
+# 3. 必要なシステムパッケージと日本語フォントの導入
+COPY --chown=sandboxuser:sandboxuser rce_requirements.txt .
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    fonts-ipafont-gothic \
+    && rm -rf /var/lib/apt/lists/*
 
-# 4. RCEカーネルの起動コマンド (Jupyter Kernelの場合)
-# このコマンドは、FastAPIがカーネルを起動するために必要です。
-# 実際には、カーネル起動はFastAPI側からDocker SDK経由で行われますが、
-# このイメージがカーネル実行に必要な環境を提供します。
-# CMD ["python", "-m", "ipykernel_launcher"] 
+# 4. 依存ライブラリのインストール
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel jaraco.context && \
+    pip install --no-cache-dir -r rce_requirements.txt
+
+# 5. japanize-matplotlib のスタートアップ自動ロード設定
+# これにより、ユーザーコード側で明示的に import しなくても、Matplotlib の日本語文字化けとフォント警告を自動的に回避します。
+RUN printf "try:\n    import japanize_matplotlib\nexcept ImportError:\n    pass\n" > /usr/local/lib/python3.11/site-packages/sitecustomize.py
+
+# 6. 作業用ボリュームディレクトリの作成と権限移譲
+RUN mkdir -p /mnt/data && chown sandboxuser:sandboxuser /mnt/data
+
+USER sandboxuser
+
+# 7. コンテナの常時稼働プロセスの定義
+CMD ["tail", "-f", "/dev/null"]
 ```
 
-### 2\. RCEコンテナイメージのビルド
+### この設計のメリット：
+1. **セキュリティ (非ルート制限)**:
+   コンテナ内での実行はすべて `sandboxuser` (UID/GID 1000) に制限されています。万が一、ユーザーコードによりコンテナのエスケープや脆弱性を突いた攻撃が試みられても、ホストの root 権限を奪取することは極めて困難です。
+2. **日本語グラフ描画の自動最適化**:
+   `fonts-ipafont-gothic` フォントを導入し、Matplotlib の描画時に自動的に `japanize_matplotlib` を読み込むことで、ユーザーが日本語を含むラベルやタイトルを出力しても `DejaVu Sans` 等の豆腐（文字化け）や警告メッセージを出さずに、美しい日本語グラフを出力できます。
 
-このカスタムイメージをビルドし、FastAPIゲートウェイからアクセスできるDockerレジストリ、またはローカルのDockerホストに配置します。
+---
 
-```bash
-docker build -f Dockerfile.rce -t custom-rce-kernel:latest.
-```
+## 3. APIゲートウェイ（`main.py`）側のコンテナ制御とセキュリティ制限
 
-この`custom-rce-kernel:latest`イメージには、`pandas`, `numpy`, `matplotlib`など、あなたが定義した任意のライブラリのみが含まれ、ユーザーはその外部のライブラリにアクセスすることはできません。
+FastAPI側は、Docker SDK for Python (`docker-py`) を使用して、コンテナの起動パラメータで強固なリソース制限およびネットワーク隔離を適用します。
 
------
-
-## II. FastAPIゲートウェイの実装と連携ロジック
-
-FastAPIゲートウェイ（プロキシAPI）は、LibreChatからのリクエストを受け取り、上記のカスタムイメージを使用してセッション固有の隔離コンテナを起動・管理します。
-
-### 1\. APIゲートウェイのライブラリ設定
-
-FastAPIコンテナでDocker APIを操作するために、`docker`ライブラリ（`docker-py`）が必要です。
-
-**`requirements.txt` (FastAPIゲートウェイ用)**
-
-```
-fastapi[standard]
-uvicorn[standard]
-pydantic
-python-multipart
-docker
-```
-
-### 2\. コード実行ロジックの実装（`main.py`）
-
-`/run`エンドポイントは、`session_id`を受け取ると、Docker SDK (`docker-py`) を使用してカスタムRCEイメージを実行します。
+### `KernelManager` で行われる主要な設定パラメータ
 
 ```python
-import docker
-#... (他のインポート, FastAPI初期化, 認証ロジック)
+def start_new_container_unlocked(self, session_id: str, external_session_id: Optional[str] = None):
+    # 同時最大セッション数制限（サービス容量上限の制御）
+    if len(self.active_kernels) >= RCE_MAX_SESSIONS:
+        raise HTTPException(status_code=503, detail="Server is at capacity.")
 
-# Dockerクライアントの初期化 (FastAPIがDockerデーモンと通信できるように設定されている必要があります)
-DOCKER_CLIENT = docker.from_env()
+    config = self._get_container_config()
+    volumes = self._prepare_volumes(session_id)
 
-# カスタムRCEイメージ名を設定
-RCE_IMAGE_NAME = "custom-rce-kernel:latest"
-
-# 1. セッションデータの永続化設定
-# セッション固有のファイル、変数、環境の状態を維持するためのコンテナ管理クラス
-class KernelManager:
-    # 実際の実装では、セッションIDとコンテナID、カーネル接続情報をマッピングする辞書やDBが必要
-    active_kernels = {} 
-    
-    def start_new_kernel_in_container(self, session_id: str, image_name: str, cpu_limit: str = '0.5', mem_limit: str = '512m'):
-        """カスタムRCEイメージを使用して新しいカーネルコンテナを起動し、リソースを制限する"""
-        
-        # セッション専用のDocker Volumeを定義 (ファイルの永続化のため)
-        volume_name = f'librechat_vol_{session_id}'
-
-        # Dockerコンテナの起動 (Jupyter Kernelとして)
-        container = DOCKER_CLIENT.containers.run(
-            image=image_name,
-            # RCEコンテナの起動コマンドをカーネル起動に合わせる
-            command='jupyter-kernel-launch-command', # 適切なカーネル起動コマンド
-            
-            # ** 必須: リソース制限の適用 **
-            mem_limit=mem_limit,       # メモリ制限を適用 
-            cpus=float(cpu_limit),     # CPU使用率制限を適用 (例: 0.5 = 50% CPU) 
-            
-            # ** 必須: ファイルシステム隔離とセッション維持 **
-            volumes={
-                volume_name: {'bind': '/mnt/session_data', 'mode': 'rw'}
-            },
-            # 必須: ネットワーク隔離 (ホストや外部ネットワークへのアクセスを禁止)
-            network_disabled=True, 
-            detach=True,
-            remove=True,
-        )
-        # 起動したコンテナの情報を保存 (active_kernelsにsession_idとコンテナIDをマッピング)
-        self.active_kernels[session_id] = container.id
-        #... ここでカーネル接続情報を取得し、セッションに紐づけるロジック
-        return container.id
-
-kernel_manager = KernelManager() # KernelManagerのインスタンス化
-
-@app.post("/run")
-async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
-    """LibreChatからのコード実行リクエストを処理"""
-    
-    # 1. セッションカーネルの確認と起動
-    if req.session_id not in kernel_manager.active_kernels:
-        # 該当セッションが存在しない場合、カスタムイメージで新規にカーネルを起動
-        kernel_manager.start_new_kernel_in_container(req.session_id, RCE_IMAGE_NAME)
-        
-    # 2. 既存のカーネルにコードを送信
-    # ユーザーが要求したコードを、req.session_idに対応するカーネルに送信する
-    # このカーネルは、事前にインストールされたライブラリのみを利用できる
-    execution_result = await kernel_manager.execute_code(req.session_id, req.code)
-
-    return {
-        "stdout": execution_result.stdout,
-        "stderr": execution_result.stderr,
-        "exit_code": execution_result.exit_code
-    }
+    container = DOCKER_CLIENT.containers.run(
+        image=RCE_IMAGE_NAME,
+        command="tail -f /dev/null",  # コンテナの常時起動
+        detach=True,
+        remove=True,                  # 停止時にコンテナリソースを自動クリーンアップ
+        name=f"rce_{session_id}_{uuid.uuid4().hex[:6]}",
+        working_dir="/mnt/data",
+        labels={
+            "managed_by": "librechat-rce",
+            "session_id": session_id,
+            "external_session_id": external_session_id or ""
+        },
+        environment={"PYTHONUNBUFFERED": "1"},
+        volumes=volumes,
+        **config
+    )
+    container.exec_run(cmd=["mkdir", "-p", "/mnt/data"])
+    return container
 ```
 
-この構築方法により、FastAPIゲートウェイは、**あなたが事前に定義し、利用を許可したライブラリのみ**を含むカスタムイメージ (`custom-rce-kernel:latest`) をサンドボックスとして使用することが保証されます。
+### セキュリティとリソース管理のパラメータ詳細
+
+1. **メモリ制限 (`mem_limit`)**:
+   環境変数 `RCE_MEM_LIMIT`（デフォルト `512m`）でコンテナあたりの物理メモリ上限を設定。悪意のあるプログラムによるメモリ無限確保（DoS攻撃）からホストシステムを保護します。
+2. **CPU制限 (`nano_cpus`)**:
+   環境変数 `RCE_CPU_LIMIT`（デフォルト `500000000` = 0.5 CPU）でCPU割り当てを設定。コンテナ内での無限ループ（`while True:`）等の実行がホストの全CPUコアを占有するのを防止します。
+3. **ネットワーク隔離 (`network_disabled=True`)**:
+   環境変数 `RCE_NETWORK_ENABLED`（デフォルト `false`）により、コンテナ内部からの外部インターネット通信を完全に遮断。サンドボックス内部で取得したデータやAPIキーなどの機密情報を外部の悪意あるサーバーへ送信（データ漏洩）する不正アクセスを防ぎます。
+4. **データの永続化と転送モード**:
+   * **ボリュームマウントモード**:
+     ホスト側のデータ保存先ディレクトリ (`RCE_DATA_DIR`) が指定されている場合、ホストの専用セッションフォルダをコンテナの `/mnt/data` へ直接マウントします。これにより高速な読み書きと永続化が可能になります。
+   * **put_archive モード（標準）**:
+     ボリュームをマウントしない構成の場合、ファイルを `tar` アーカイブ化して Docker API 経由でコンテナへプッシュします。特別なホストパーミッションの設定なしで動作する利便性があります。
