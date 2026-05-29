@@ -10,7 +10,6 @@ from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 import httpx
 import base64
-import json
 import logging
 import urllib.parse
 
@@ -184,10 +183,8 @@ class Tools:
             for file_info in files_generated:
                 if isinstance(file_info, dict):
                     filename = file_info.get("name", "")
-                    file_id = file_info.get("id", filename)
                 else:
                     filename = str(file_info)
-                    file_id = filename
                 
                 if not filename:
                     continue
