@@ -75,3 +75,32 @@ def test_session_mapping_helper_existing_session():
     
     assert real_uuid == real_uuid_2
     assert resolved_nanoid == resolved_nanoid_2
+
+def test_librechat_session_id_omission_bug_fix():
+    """LibreChatクライアント側でsession_idが欠落したバグに対し、user_idからセッションIDをフォールバック再利用するロジックを検証。"""
+    from unittest.mock import patch, MagicMock
+    with patch("main.DOCKER_CLIENT") as mock_client:
+        mock_container = MagicMock()
+        mock_exec_res = MagicMock()
+        mock_exec_res.exit_code = 0
+        mock_exec_res.output = (b"stdout", b"stderr")
+        mock_container.exec_run.return_value = mock_exec_res
+        mock_client.containers.run.return_value = mock_container
+
+        headers = {"X-API-Key": API_KEY}
+        test_user_id = "12345"
+        
+        # session_idを渡さず、user_idのみを渡す
+        response = client.post(
+            "/exec",
+            json={
+                "code": "print('ok')",
+                "user_id": test_user_id
+            },
+            headers=headers
+        )
+        assert response.status_code == 200
+        
+        # 戻り値の session_id が "user_12345" になっていることを検証
+        returned_session_id = response.json()["session_id"]
+        assert returned_session_id == f"user_{test_user_id}"
