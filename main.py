@@ -9,7 +9,7 @@ import time
 import asyncio
 import string
 import secrets
-from fastapi import FastAPI, HTTPException, Security, UploadFile, File, Form, Query, BackgroundTasks, Response
+from fastapi import FastAPI, HTTPException, Security, UploadFile, File, Form, Query, BackgroundTasks, Response, Request
 from contextlib import asynccontextmanager
 from fastapi.security import APIKeyHeader
 from fastapi.responses import FileResponse
@@ -27,9 +27,17 @@ from starlette.types import Scope, Receive, Send
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Configuration
+# 直近でファイルがアップロードされたセッション情報を一時記録するグローバル変数（認証バグやセッション連携漏れ回避用）
+LAST_UPLOADED_SESSION_ID = None
+LAST_UPLOAD_TIME = 0
+
+# 設定情報の読み込み
+# DISABLE_CODE_API_AUTH: テスト・ローカル環境等において認証なしでのアクセスを許可するかどうかのフラグ
+DISABLE_AUTH = os.environ.get("DISABLE_CODE_API_AUTH", "false").lower() == "true"
 API_KEY = os.environ.get("LIBRECHAT_CODE_API_KEY")
-if not API_KEY:
+
+# 認証が有効で、かつAPIキーが設定されていない場合は起動エラーとする
+if not DISABLE_AUTH and not API_KEY:
     logger.error("LIBRECHAT_CODE_API_KEY environment variable is not set.")
     raise RuntimeError("LIBRECHAT_CODE_API_KEY environment variable is not set.")
 
@@ -67,16 +75,49 @@ RCE_SESSION_TTL = int(os.environ.get("RCE_SESSION_TTL", "3600"))
 RCE_MAX_SESSIONS = int(os.environ.get("RCE_MAX_SESSIONS", "100"))
 RCE_MANAGED_BY_VALUE = "librechat-rce"
 
-# 1. Authentication Scheme
-# Use auto_error=False to allow fallback to query parameter
+# 1. 認証スキームの設定
+# クエリパラメータによるAPIキーフォールバックを許可するため、auto_error=False に設定
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 async def get_api_key(
+    request: Request = None,
     api_key_h: Optional[str] = Security(api_key_header),
     api_key_q: Optional[str] = Query(None, alias="api_key")
 ):
-    key = api_key_h or api_key_q
+    # テスト環境用に認証をスキップする設定が有効な場合、即座に通過させる
+    if DISABLE_AUTH:
+        return "disabled"
+
+    # さまざまなリクエストクライアント（LibreChatやOpen WebUIなど）からの接続に対応するため、
+    # 複数のヘッダー形式やクエリパラメータを順次フォールバックしてパースする。
+    auth_key = None
+    x_api_key = None
+    
+    if request is not None and hasattr(request, "headers"):
+        # A. Authorization: Bearer <key> ヘッダーの確認 (LibreChatのデフォルト動作)
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            auth_key = auth_header.split(" ")[1]
+            
+        # B. 小文字の x-api-key ヘッダーの確認
+        x_api_key = request.headers.get("x-api-key")
+
+    # 単体テスト時のデフォルト値（FastAPI Security/Query オブジェクト）のフィルタリング
+    # テスト環境から直接呼び出された場合、引数がないとデフォルト値のSecurity/Queryオブジェクトが渡るため
+    h_key = api_key_h if isinstance(api_key_h, str) else None
+    q_key = api_key_q if isinstance(api_key_q, str) else None
+
+    # 全ての候補をマージして検証
+    key = h_key or q_key or auth_key or x_api_key
+    
+    # 期待される APIキーと不一致の場合は 401 拒否とする
     if key != API_KEY:
+        # トラブルシューティングの容易化のため、受け取ったキーと期待されたキー、全ヘッダーのデバッグ警告を出力
+        logger.warning(
+            "Authentication failure in get_api_key! Received key: %s, Expected key (API_KEY): %s. "
+            "Headers: %s",
+            key, API_KEY, dict(request.headers) if request is not None and hasattr(request, "headers") else {}
+        )
         raise HTTPException(status_code=401, detail="Invalid API Key")
     return key
 
@@ -624,7 +665,8 @@ kernel_manager = KernelManager()
 # 3. Request/Response Schemas
 class FileInput(BaseModel):
     model_config = ConfigDict(extra="allow")
-    session_id: str
+    session_id: Optional[str] = None
+    storage_session_id: Optional[str] = None
     id: str
     name: str
 
@@ -673,12 +715,23 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
         first_file = req.files[0]
         if hasattr(first_file, "session_id") and getattr(first_file, "session_id"):
             effective_session_id = first_file.session_id
-        elif isinstance(first_file, dict) and "session_id" in first_file:
-            effective_session_id = first_file["session_id"]
+        elif hasattr(first_file, "storage_session_id") and getattr(first_file, "storage_session_id"):
+            effective_session_id = first_file.storage_session_id
+        elif isinstance(first_file, dict):
+            effective_session_id = first_file.get("session_id") or first_file.get("storage_session_id")
 
     # Fallback to user_id to ensure container reuse and improve performance
     if not effective_session_id and req.user_id:
         effective_session_id = f"user_{req.user_id}"
+        
+    # 【重要フォールバック】直近5分以内にファイルのアップロード成功実績があり、
+    # かつ実行リクエストで session_id が渡されてこなかった場合（bash_tool等のヘッダーバグやセッション連携漏れ）
+    # 直前のアップロードセッションIDを自動で再利用し、同一コンテナ内にファイルを配置した状態で実行します。
+    if not effective_session_id:
+        global LAST_UPLOADED_SESSION_ID, LAST_UPLOAD_TIME
+        if LAST_UPLOADED_SESSION_ID and (time.time() - LAST_UPLOAD_TIME < 300):
+            effective_session_id = LAST_UPLOADED_SESSION_ID
+            logger.info("Fallback activated! Re-using last uploaded session ID: %s", effective_session_id)
         
     logger.info("Effective session ID for exec: %s", effective_session_id)
 
@@ -797,6 +850,12 @@ async def upload_files(
 
         # Parallelize file reading and uploading
         results = await asyncio.gather(*[process_file(f) for f in upload_list])
+
+        # 直近でアップロードに成功したセッション情報をグローバルに記録
+        global LAST_UPLOADED_SESSION_ID, LAST_UPLOAD_TIME
+        LAST_UPLOADED_SESSION_ID = nanoid_session
+        LAST_UPLOAD_TIME = time.time()
+        logger.info("Recorded last uploaded session ID: %s", nanoid_session)
 
         uploaded_files = []
         with kernel_manager.lock:

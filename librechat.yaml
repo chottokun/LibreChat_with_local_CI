@@ -21,10 +21,12 @@ endpoints:
       summarize: true
       modelDisplayLabel: "Open AI Compatible"
 
-  ollama:
-    models:
-      default: ["qwen2.5-coder:3b"]
-      fetch: true
-    titleConvo: true
-    summarize: true
-    modelDisplayLabel: "Ollama"
+    - name: "Ollama"
+      apiKey: "ollama"
+      baseURL: "${OLLAMA_BASE_URL}/v1"
+      models:
+        default: ["qwen3.5:4b"]
+        fetch: true
+      titleConvo: true
+      summarize: true
+      modelDisplayLabel: "Ollama"

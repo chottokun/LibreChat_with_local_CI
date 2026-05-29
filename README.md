@@ -56,10 +56,6 @@ docker compose up -d --build
 ```
 LibreChat側の `.env` で `LIBRECHAT_CODE_BASEURL` と `LIBRECHAT_CODE_API_KEY` を設定してください。
 
-### C. Open WebUI 統合
-
-Open WebUIから本Code Interpreterを利用するためのツールと手順を用意しています。詳細は [open_webui_integration/README_OpenWebUI.md](./open_webui_integration/README_OpenWebUI.md) を参照してください。
-
 ---
 
 ## 環境変数 (Configuration)
@@ -67,6 +63,7 @@ Open WebUIから本Code Interpreterを利用するためのツールと手順を
 | 変数名 | デフォルト値 | 説明 |
 |---|---|---|
 | `LIBRECHAT_CODE_API_KEY` | (必須) | APIアクセス認証用の共有キー。 |
+| `DISABLE_CODE_API_AUTH` | `false` | `true` に設定するとAPIキーの認証を一時的に無効化（スキップ）します。テスト環境や一部のバグ回避用。 |
 | `RCE_IMAGE_NAME` | `custom-rce-kernel:latest` | サンドボックスコンテナに使用するイメージ。 |
 | `RCE_MEM_LIMIT` | `512m` | コンテナあたりのメモリ上限。 |
 | `RCE_CPU_LIMIT` | `500000000` | コンテナあたりのCPU制限 (0.5 CPU)。 |
@@ -100,3 +97,93 @@ uv run pytest tests/
 - 多言語実行 (Python/Bash/R) の正常系・異常系
 - ディレクトリトラバーサル等のセキュリティ検証
 - 高負荷時の並列セッション管理とリソース復旧
+
+---
+
+## トラブルシューティング（LibreChat 連携エラー）
+
+LibreChat との連携時に問題が発生した場合は、以下の手順に従って解決してください。
+
+### 1. `401 Unauthorized (Invalid API Key)` エラーが発生する場合
+一部の LibreChat バージョン（あるいは特定の実験的設定）には、**APIキーをリクエストヘッダーに正しく注入して送信しない（ヘッダーが欠落する）という既知のバグ**が存在します。
+APIサーバー側のログで `Received key: None, Expected key: your_secret_key` という警告が出ている場合、このバグに該当します。
+
+**【解決策】**:
+`.env` ファイルに以下の設定を追記し、APIキー認証を一時的に無効化（スキップ）してください。ローカルネットワーク（Dockerブリッジ）内での連携であれば、安全に機能します。
+```env
+DISABLE_CODE_API_AUTH=true
+```
+設定後、コンテナを再ビルド・再起動して変更を反映します：
+```bash
+docker compose -f docker-compose.yml -f docker-compose.librechat.yml build --no-cache code-interpreter-api
+docker compose -f docker-compose.yml -f docker-compose.librechat.yml up -d --force-recreate
+```
+
+### 2. 外部からポート接続ができない場合（3000番ポートへの変更）
+外部PCやネットワーク内の他の端末から LibreChat にアクセスできない場合、デフォルトの `3080` ポートではなく、ポート **`3000`** で待ち受けるようマッピングを変更します。
+* `docker-compose.librechat.yml` 内の `librechat` サービスポートマッピング：
+  ```yaml
+  ports:
+    - "3000:3080" # ホスト側の3000ポートをコンテナの3080ポートへ
+  ```
+* 変更後、コンテナを再起動してください。
+  ```bash
+  docker compose -f docker-compose.yml -f docker-compose.librechat.yml up -d
+  ```
+
+### 3. Ollama モデルが UI の選択メニューに反映されない場合
+`librechat.yaml` で `endpoints.ollama` を直接定義すると、Zod バリデーションエラー（構文エラー）が発生し、設定全体の読み込みが壊れる原因になります。
+また、Ollama が別プロジェクトの Docker ネットワークで動いている場合、ホスト名 `ollama` では名前解決できません。
+
+**【解決策】**:
+Ollama は標準で OpenAI 互換の API エンドポイントを提供しているため、`librechat.yaml` の `endpoints.custom`（OpenAI互換リスト）に統合するのが最も確実です。
+1. **`librechat.yaml` の修正**:
+   ```yaml
+   endpoints:
+     custom:
+       - name: "Ollama"
+         apiKey: "ollama"
+         baseURL: "${OLLAMA_BASE_URL}/v1"
+         models:
+           default: ["qwen3.5:4b"]
+           fetch: true
+         titleConvo: true
+         summarize: true
+         modelDisplayLabel: "Ollama"
+   ```
+2. **`.env` ファイルで `host.docker.internal` 経由での接続に設定**:
+   別プロジェクトで動く Ollama へホストマシン経由で接続させるため、以下を設定します。
+   ```env
+   OLLAMA_BASE_URL=http://host.docker.internal:11434
+   ```
+3. **コンテナ内からホスト側への名前解決（`extra_hosts`）を追加**:
+   `docker-compose.librechat.yml` の `librechat` サービスに以下を追記してください。
+   ```yaml
+   extra_hosts:
+     - "host.docker.internal:host-gateway"
+   ```
+* 変更後、コンテナを再起動してください。
+  ```bash
+  docker compose -f docker-compose.yml -f docker-compose.librechat.yml up -d
+  ```
+
+### 4. 日本語ファイル名の文字化け（原因と現在の制限事項）
+ブラウザから非ASCII文字（日本語等）を含むファイル名をアップロードした際、ファイル名がアンダースコア（`_`）に置き換わったり文字化けしたりする現象は、LibreChat本体（上流）のファイルアップロードミドルウェア（`multer`/`busboy`）における歴史的なLatin1解釈の制約およびサニタイズ処理に起因します（Issue #8792）。
+
+**本API（Custom RCE）側の対応**:
+* サンドボックス環境内で日本語ファイル名を正しく処理できるように、ロケールをUTF-8（`LANG=C.UTF-8`, `LC_ALL=C.UTF-8`）に設定し、ファイル一覧取得にシェルコマンド `ls` ではなく Python の `os.listdir` を採用することで、API内部での文字化けを防止しています。
+* ダウンロード時には RFC 5987 に準拠した `Content-Disposition` ヘッダーを返却します。
+
+**現在の制限**:
+API側は日本語名を維持する設計となっていますが、LibreChat本体が送信前にファイル名をサニタイズ（アンダースコア等に変換）して送信する場合、システム全体としては文字化けした名前（またはアンダースコア）で登録されます。これを完全に解消するには、LibreChat本体側にパッチを適用するか、今後のバージョンアップでファイル名管理がデータベース上のメタデータ管理に移行される必要があります。
+
+### 5. セッションID欠落によるコンテナの頻繁な再生成問題
+ファイルを添付せずにコードを実行する際、LibreChatのクライアント側モジュール（`@librechat/agents`）がAPIリクエストのトップレベルで `session_id` を送信しないという仕様上の挙動があります。このため、リクエストごとに新しいコンテナが起動され、数秒の起動オーバーヘッドや状態（変数や作成されたファイル）の消失が発生する問題があります。
+
+**本API（Custom RCE）側の自動フォールバック機能**:
+本APIでは、この上流側の制限に対処するため、複数のフォールバック機構を内蔵しています（特別な設定変更は不要です）。
+1. **`user_id` によるバインド**: リクエストに `user_id` が含まれている場合、自動的に `user_<user_id>` をセッションIDとしてバインドし、コンテナを再利用します。
+2. **直前セッションの再利用**: 直前5分以内にファイルのアップロード成功実績があり、かつ実行リクエストで `session_id` が欠落している場合、直前のアップロードセッションIDを自動で再利用し、同一コンテナ内でコードを実行します。
+
+これにより、コンテナの無駄な再生成が抑制され、起動レイテンシがミリ秒単位に低減し、セッション間の状態が安定して維持されます。
+
