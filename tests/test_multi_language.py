@@ -1,6 +1,6 @@
 import pytest
 from fastapi.testclient import TestClient
-from main import app, kernel_manager, API_KEY
+from main import app, API_KEY
 from unittest.mock import MagicMock, patch
 
 client = TestClient(app)
@@ -91,6 +91,7 @@ def test_python_still_wrapped(mock_docker):
     put_archive_calls = mock_docker.containers.run.return_value.put_archive.call_args_list
     # The last put_archive should be the code
     code_tar = put_archive_calls[-1].args[1]
+    assert code_tar is not None
     # We can't easily check the content of the tar here without extracting,
     # but we can assume wrap_code worked if it's called with python.
 

@@ -1,11 +1,8 @@
-import asyncio
 import pytest
 from fastapi.testclient import TestClient
 from main import app, kernel_manager, API_KEY
 from unittest.mock import MagicMock, patch
 import json
-import io
-import tarfile
 
 client = TestClient(app)
 

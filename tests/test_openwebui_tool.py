@@ -1,7 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from open_webui_integration.rce_workspace_tool import Tools
-import json
 import base64
 
 @pytest.mark.asyncio

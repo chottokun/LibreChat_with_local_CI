@@ -9,18 +9,19 @@ import time
 import asyncio
 import string
 import secrets
-from fastapi import FastAPI, HTTPException, Security, UploadFile, File, Form, Query, BackgroundTasks, Response, Request
+from fastapi import FastAPI, HTTPException, Security, UploadFile, File, Form, Query, BackgroundTasks, Response
 from contextlib import asynccontextmanager
 from fastapi.security import APIKeyHeader
 from fastapi.responses import FileResponse
 import mimetypes
-import tempfile
 from urllib.parse import quote
 from pydantic import BaseModel, ConfigDict
 from typing import List, Optional, Dict, Any, Tuple
 import shutil
 import ast
 import json
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.types import Scope, Receive, Send
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -152,8 +153,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-from fastapi.middleware.cors import CORSMiddleware
-from starlette.types import ASGIApp, Scope, Receive, Send
+
 
 class SecurityHeadersCORSMiddleware(CORSMiddleware):
     """
