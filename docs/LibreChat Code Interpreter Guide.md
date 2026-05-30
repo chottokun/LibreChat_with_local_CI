@@ -10,11 +10,11 @@
 
 ```mermaid
 graph TD
-    LC[LibreChat UI & Backend] -- 1. コード実行リクエスト (/exec) --> API[FastAPI Gateway (main.py)]
-    API -- 2. 認証検証 / セッションID解決 --> KM[KernelManager]
-    KM -- 3. コンテナ割り当て / exec_run --> RCE[Docker Sandbox (Dockerfile.rce)]
-    RCE -- 4. 実行結果返却 --> KM
-    KM -- 5. レスポンスフォーマット (21字NanoIDマッピング) --> LC
+    LC["LibreChat UI & Backend"] -- "1. コード実行リクエスト (/exec)" --> API["FastAPI Gateway (main.py)"]
+    API -- "2. 認証検証 / セッションID解決" --> KM["KernelManager"]
+    KM -- "3. コンテナ割り当て / exec_run" --> RCE["Docker Sandbox (Dockerfile.rce)"]
+    RCE -- "4. 実行結果返却" --> KM
+    KM -- "5. レスポンスフォーマット (21字NanoIDマッピング)" --> LC
 ```
 
 ---
