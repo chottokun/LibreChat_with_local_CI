@@ -1,9 +1,8 @@
 import pytest
 import asyncio
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import patch, AsyncMock
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-import main
 
 @pytest.mark.asyncio
 async def test_lifespan_function_direct():
@@ -85,7 +84,7 @@ async def test_lifespan_startup_recovery_internal_error():
 
         from main import app
         # recover_containers のモックは行わず、実際の内部例外を発生させて lifespan を続行させる
-        with TestClient(app) as client:
+        with TestClient(app):
             mock_cleanup.assert_called_once()
 
 
@@ -95,7 +94,7 @@ async def test_lifespan_error_handling_during_shutdown():
     シャットダウン中にクリーンアップループが CancelledError を発生させた場合に、
     それが正常に捕捉されて「Cleanup task cancelled during shutdown.」とログ出力されることを検証します。
     """
-    with patch("main.kernel_manager.recover_containers") as mock_recover, \
+    with patch("main.kernel_manager.recover_containers"), \
          patch("main.kernel_manager.cleanup_loop", new_callable=AsyncMock) as mock_cleanup, \
          patch("main.logger.info") as mock_logger_info:
 
@@ -135,5 +134,5 @@ async def test_lifespan_shutdown_exception_handling():
 
         from main import app
         with pytest.raises(RuntimeError, match="Unexpected error during cancellation"):
-            with TestClient(app) as client:
+            with TestClient(app):
                 pass
