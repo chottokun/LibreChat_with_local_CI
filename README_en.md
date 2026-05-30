@@ -165,16 +165,21 @@ Ollama officially supports OpenAI-compatible API paths. Integrate it as a custom
   docker compose -f docker-compose.yml -f docker-compose.librechat.yml up -d
   ```
 
-### 4. Japanese Filename Corruption (Cause & Current Limitations)
-When uploading files with non-ASCII characters (e.g., Japanese, Chinese) from the browser, filenames may be replaced with underscores (`_`) or corrupted. This is caused by historical Latin1 encoding assumptions and sanitization routines in LibreChat's upstream file-upload middleware (`multer`/`busboy`) (Issue #8792).
+### 4. Full Support for Japanese Filenames (Resolution & Mechanism)
+Historically, uploads with non-ASCII characters (e.g., Japanese, Chinese) from the browser suffered from filename corruption (Latin1 misinterpretation) or were forcibly sanitized into underscores due to the legacy middleware structure (`multer`/`busboy`) in upstream LibreChat (Issue #8792).
 
-**Custom RCE API Mitigations**:
-* To correctly handle non-ASCII filenames within the sandbox, the sandbox container locale is set to UTF-8 (`LANG=C.UTF-8`, `LC_ALL=C.UTF-8`). 
-* The API avoids shell-dependent `ls` commands and uses Python's `os.listdir` to fetch lists robustly.
-* For file downloads, the API responds with RFC 5987-compliant `Content-Disposition` headers to ensure browsers decode the filenames correctly.
+**Current Status & Resolution**:
+In recent LibreChat releases (v0.8.4 and later), this issue has been completely bypassed. **Non-ASCII/Japanese filenames are now fully preserved and functional inside the RCE container**. This seamless integration relies on the following robust coordination:
 
-**Current Limitations**:
-Although the API is fully compatible with UTF-8 filenames, if the upstream LibreChat client/server sanitizes or corrupts the filenames before sending them to the API, the system will record and process them with those modified/corrupted names. Resolving this entirely requires a patch on the LibreChat core codebase, or database-backed filename metadata handling in future LibreChat versions.
+1. **Upstream Database Metadata Delegation**:
+   While LibreChat sanitizes filenames stored on the host disk to ensure operating system compatibility, it securely retains the user's original UTF-8 filename in its database (MongoDB). When proxying the file upload to our RCE API's `/upload` endpoint, LibreChat retrieves the original filename from the database and injects it directly into the `filename` parameter of the multipart request using proper UTF-8 encoding.
+2. **Custom API Receipt**:
+   FastAPI's `UploadFile` handles the incoming multipart request, correctly decoding the UTF-8 headers to restore `f.filename`. Our API avoids any additional destructive sanitization, storing the file exactly as named inside the container's volume (`/mnt/data`).
+3. **Sandbox Locale Integration**:
+   The sandbox image (`Dockerfile.rce`) strictly enforces a UTF-8 environment (`ENV LANG=C.UTF-8`, `ENV PYTHONUTF8=1`). This allows the container's OS and Python runtime to read and write these non-ASCII files (e.g., `open('資料.pdf')`) natively without triggering path or character encoding errors.
+4. **RFC 5987-Compliant Downloads**:
+   During file downloads, the API generates RFC 5987-compliant `Content-Disposition: attachment; filename*=UTF-8''...` headers, ensuring the browser correctly decodes the Japanese filenames upon download.
+
 
 ### 5. Frequent Container Re-creation due to Missing Session ID
 When executing code without attaching files, LibreChat's client-side module (`@librechat/agents`) does not include the top-level `session_id` in its API requests. This results in the API spinning up a fresh container for every execution, introducing a latency overhead of 2-3 seconds and losing variables or files created in previous turns.
