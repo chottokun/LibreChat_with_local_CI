@@ -12,11 +12,11 @@
 
 ```mermaid
 graph LR
-    User[ブラウザ] -- 1. 資料.pdf (UTF-8) --> LC[LibreChat Server]
-    LC -- 2. 原本メタデータ保持 (MongoDB) --> DB[(Database)]
-    LC -- 3. 原本名 (UTF-8) で中継 --> API[FastAPI (f.filename)]
-    API -- 4. そのまま書き込み --> Volume[(RCE Volume)]
-    Volume -- 5. UTF-8ロケールで認識 --> Sandbox[Docker Sandbox]
+    User["ブラウザ"] -- "1. 資料.pdf (UTF-8)" --> LC["LibreChat Server"]
+    LC -- "2. 原本メタデータ保持 (MongoDB)" --> DB[("Database (MongoDB)")]
+    LC -- "3. 原本名 (UTF-8) で中継" --> API["FastAPI (f.filename)"]
+    API -- "4. そのまま書き込み" --> Volume[("RCE Volume")]
+    Volume -- "5. UTF-8ロケールで認識" --> Sandbox["Docker Sandbox"]
 ```
 
 ### ① 上流（LibreChat）のメタデータ中継仕様
