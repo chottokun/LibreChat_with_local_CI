@@ -105,19 +105,22 @@ Test Coverage:
 If you encounter issues when integrating this Code Interpreter with LibreChat, follow the steps below to resolve them.
 
 ### 1. `401 Unauthorized (Invalid API Key)` Error
-Certain versions or configurations of LibreChat may fail to inject the `x-api-key` or `Authorization` header during API requests (leaving the key empty). 
-If the API container logs show `Received key: None, Expected key: your_secret_key` with a warning message, you are affected by this bug.
+Historically, certain versions or configurations of LibreChat failed to inject the `x-api-key` or `Authorization` header during API requests (leaving the key empty). 
+If the API container logs show `Received key: None, Expected key: your_secret_key` with a warning message, you were affected by this bug.
 
-**【Solution】**:
-Add the following line to your `.env` file to skip (bypass) API key validation. This is safe to use in a local network or Docker bridge network setup.
-```env
-DISABLE_CODE_API_AUTH=true
-```
-After making changes, rebuild the image without cache and recreate the containers:
-```bash
-docker compose -f docker-compose.yml -f docker-compose.librechat.yml build --no-cache code-interpreter-api
-docker compose -f docker-compose.yml -f docker-compose.librechat.yml up -d --force-recreate
-```
+**【Current Status & Solution】**:
+In recent upstream LibreChat releases (v0.8.4-rc1 and later), this header injection bug has been **fully resolved**.
+* Secure authentication with `LIBRECHAT_CODE_API_KEY` enabled is now supported out-of-the-box.
+* If you are running an older, unpatched custom build of LibreChat and still see the above warning in the API logs, you can use the temporary workaround of adding the following line to your `.env` file to bypass API key validation (safe in a local or bridge network environment):
+  ```env
+  DISABLE_CODE_API_AUTH=true
+  ```
+  After making changes, rebuild the image without cache and recreate the containers:
+  ```bash
+  docker compose -f docker-compose.yml -f docker-compose.librechat.yml build --no-cache code-interpreter-api
+  docker compose -f docker-compose.yml -f docker-compose.librechat.yml up -d --force-recreate
+  ```
+
 
 ### 2. External Access Issues (Changing Host Port to 3000)
 If you cannot access LibreChat from other devices on the same local network, change the port mapping from the default `3080` to **`3000`** in `docker-compose.librechat.yml`:

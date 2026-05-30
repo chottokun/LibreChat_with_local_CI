@@ -105,19 +105,22 @@ uv run pytest tests/
 LibreChat との連携時に問題が発生した場合は、以下の手順に従って解決してください。
 
 ### 1. `401 Unauthorized (Invalid API Key)` エラーが発生する場合
-一部の LibreChat バージョン（あるいは特定の実験的設定）には、**APIキーをリクエストヘッダーに正しく注入して送信しない（ヘッダーが欠落する）という既知のバグ**が存在します。
+かつての LibreChat の一部バージョン（あるいは特定の実験的設定）には、**APIキーをリクエストヘッダーに正しく注入して送信しない（ヘッダーが欠落する）という既知のバグ**が存在していました。
 APIサーバー側のログで `Received key: None, Expected key: your_secret_key` という警告が出ている場合、このバグに該当します。
 
-**【解決策】**:
-`.env` ファイルに以下の設定を追記し、APIキー認証を一時的に無効化（スキップ）してください。ローカルネットワーク（Dockerブリッジ）内での連携であれば、安全に機能します。
-```env
-DISABLE_CODE_API_AUTH=true
-```
-設定後、コンテナを再ビルド・再起動して変更を反映します：
-```bash
-docker compose -f docker-compose.yml -f docker-compose.librechat.yml build --no-cache code-interpreter-api
-docker compose -f docker-compose.yml -f docker-compose.librechat.yml up -d --force-recreate
-```
+**【現在の解決状況と解決策】**:
+最新の LibreChat（v0.8.4-rc1 以降）においては、このヘッダー注入バグは**上流（公式）で修正済み**です。
+* 現在は `LIBRECHAT_CODE_API_KEY` を設定した状態でのセキュアな認証付き連携が標準で正常動作します。
+* もし古いビルドや特定のカスタムエージェント環境を利用しており、依然としてAPIログに上記の警告が出て連携できない場合に限り、暫定の回避策として `.env` ファイルに以下を追記してAPIキー検証をスキップさせることが有効です（ローカルネットワーク内であれば安全です）。
+  ```env
+  DISABLE_CODE_API_AUTH=true
+  ```
+  設定後、コンテナを再ビルド・再起動して変更を反映します：
+  ```bash
+  docker compose -f docker-compose.yml -f docker-compose.librechat.yml build --no-cache code-interpreter-api
+  docker compose -f docker-compose.yml -f docker-compose.librechat.yml up -d --force-recreate
+  ```
+
 
 ### 2. 外部からポート接続ができない場合（3000番ポートへの変更）
 外部PCやネットワーク内の他の端末から LibreChat にアクセスできない場合、デフォルトの `3080` ポートではなく、ポート **`3000`** で待ち受けるようマッピングを変更します。
