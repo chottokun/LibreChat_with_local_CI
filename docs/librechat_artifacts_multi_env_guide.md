@@ -72,6 +72,17 @@ docker compose -f docker-compose.yml -f docker-compose.librechat.yml up -d
 docker compose -f docker-compose.yml -f docker-compose.librechat.yml --profile ssl-mode up -d
 ```
 
+### 2.3 エージェント（Agents）UIでの機能無効化手順（推奨）
+
+非SSL環境（フェーズ1）では、環境変数の無効化に加えて、チャット画面上での不要な「接続エラー（TIME_OUT）」画面の発生を防ぐため、**AIエージェントの作成・編集画面（UI）から直接Artifacts機能をオフにする運用**を強く推奨します。
+
+1. LibreChatの画面左側のメニューから **「Agents（エージェント）」** または **「エージェント・マーケットプレイス」** を開きます。
+2. 使用するエージェントの編集（ペンアイコン）画面を開きます。
+3. エージェントの能力設定（**Capabilities**）一覧にある **「Artifacts」** のトグルスイッチを **オフ** にします。
+4. 設定を保存します。
+
+このUI操作を行うことで、そのエージェントはチャット中にArtifactsを生成しなくなり、画面右側にプレビューパネルが開こうとすること自体がなくなるため、不要なネットワークタイムアウトエラーを美しく完全に回避できます。
+
 ---
 
 ## 3. 環境変数（.env）の分離設計
