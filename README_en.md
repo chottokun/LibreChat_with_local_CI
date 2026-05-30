@@ -100,27 +100,23 @@ Test Coverage:
 
 ---
 
-## Troubleshooting (LibreChat Integration Issues)
+## Troubleshooting (LibreChat Integration & Configuration)
 
-If you encounter issues when integrating this Code Interpreter with LibreChat, follow the steps below to resolve them.
+If you encounter issues when integrating this Code Interpreter with LibreChat, follow the steps below to adjust your configuration.
 
 ### 1. `401 Unauthorized (Invalid API Key)` Error
-Historically, certain versions or configurations of LibreChat failed to inject the `x-api-key` or `Authorization` header during API requests (leaving the key empty). 
-If the API container logs show `Received key: None, Expected key: your_secret_key` with a warning message, you were affected by this bug.
+If the API container logs show `Received key: None, Expected key: your_secret_key` with a warning message, the API key header is missing from the LibreChat request.
 
-**【Current Status & Solution】**:
-In recent upstream LibreChat releases (v0.8.4-rc1 and later), this header injection bug has been **fully resolved**.
-* Secure authentication with `LIBRECHAT_CODE_API_KEY` enabled is now supported out-of-the-box.
-* If you are running an older, unpatched custom build of LibreChat and still see the above warning in the API logs, you can use the temporary workaround of adding the following line to your `.env` file to bypass API key validation (safe in a local or bridge network environment):
-  ```env
-  DISABLE_CODE_API_AUTH=true
-  ```
-  After making changes, rebuild the image without cache and recreate the containers:
-  ```bash
-  docker compose -f docker-compose.yml -f docker-compose.librechat.yml build --no-cache code-interpreter-api
-  docker compose -f docker-compose.yml -f docker-compose.librechat.yml up -d --force-recreate
-  ```
-
+**【Solution】**:
+You can temporarily bypass API key verification for local network setups. Add the following line to your `.env` file:
+```env
+DISABLE_CODE_API_AUTH=true
+```
+After making changes, rebuild the image without cache and recreate the containers:
+```bash
+docker compose -f docker-compose.yml -f docker-compose.librechat.yml build --no-cache code-interpreter-api
+docker compose -f docker-compose.yml -f docker-compose.librechat.yml up -d --force-recreate
+```
 
 ### 2. External Access Issues (Changing Host Port to 3000)
 If you cannot access LibreChat from other devices on the same local network, change the port mapping from the default `3080` to **`3000`** in `docker-compose.librechat.yml`:
@@ -168,29 +164,12 @@ Ollama officially supports OpenAI-compatible API paths. Integrate it as a custom
   docker compose -f docker-compose.yml -f docker-compose.librechat.yml up -d
   ```
 
-### 4. Full Support for Japanese Filenames (Resolution & Mechanism)
-Historically, uploads with non-ASCII characters (e.g., Japanese, Chinese) from the browser suffered from filename corruption (Latin1 misinterpretation) or were forcibly sanitized into underscores due to the legacy middleware structure (`multer`/`busboy`) in upstream LibreChat (Issue #8792).
+### 4. Technical Architecture and Bug Reference Specifications
+For detailed internal specifications regarding character encoding, path resolutions, and automatic API mitigation systems, refer to the dedicated technical documents in the `/docs` directory for future development:
 
-**Current Status & Resolution**:
-In recent LibreChat releases (v0.8.4 and later), this issue has been completely bypassed. **Non-ASCII/Japanese filenames are now fully preserved and functional inside the RCE container**. This seamless integration relies on the following robust coordination:
+* **[Japanese Filename Preservation & Spec Reference](file:///home/nobuhiko/Project/LibreChat_with_local_CI/docs/librechat_japanese_filename_bug.md)**:
+  Technical specifications for upstream database UTF-8 metadata delegation and API sandbox-side preservation (os.listdir, locale, and RFC 5987 downloads).
+* **[Session ID Resolution & Automatic Fallback Reference](file:///home/nobuhiko/Project/LibreChat_with_local_CI/docs/librechat_session_id_bug_analysis.md)**:
+  Technical design documentation for managing missing Session IDs, covering the API-side `user_id` binding and recently-uploaded session cache lookups that achieve sub-second execution latency.
 
-1. **Upstream Database Metadata Delegation**:
-   While LibreChat sanitizes filenames stored on the host disk to ensure operating system compatibility, it securely retains the user's original UTF-8 filename in its database (MongoDB). When proxying the file upload to our RCE API's `/upload` endpoint, LibreChat retrieves the original filename from the database and injects it directly into the `filename` parameter of the multipart request using proper UTF-8 encoding.
-2. **Custom API Receipt**:
-   FastAPI's `UploadFile` handles the incoming multipart request, correctly decoding the UTF-8 headers to restore `f.filename`. Our API avoids any additional destructive sanitization, storing the file exactly as named inside the container's volume (`/mnt/data`).
-3. **Sandbox Locale Integration**:
-   The sandbox image (`Dockerfile.rce`) strictly enforces a UTF-8 environment (`ENV LANG=C.UTF-8`, `ENV PYTHONUTF8=1`). This allows the container's OS and Python runtime to read and write these non-ASCII files (e.g., `open('資料.pdf')`) natively without triggering path or character encoding errors.
-4. **RFC 5987-Compliant Downloads**:
-   During file downloads, the API generates RFC 5987-compliant `Content-Disposition: attachment; filename*=UTF-8''...` headers, ensuring the browser correctly decodes the Japanese filenames upon download.
-
-
-### 5. Frequent Container Re-creation due to Missing Session ID
-When executing code without attaching files, LibreChat's client-side module (`@librechat/agents`) does not include the top-level `session_id` in its API requests. This results in the API spinning up a fresh container for every execution, introducing a latency overhead of 2-3 seconds and losing variables or files created in previous turns.
-
-**Custom RCE API Automatic Fallbacks**:
-To address this upstream limitation gracefully, this API incorporates multiple built-in fallback mechanisms (no configuration required):
-1. **`user_id` Binding**: If a `user_id` is present in the request payload, the API binds the sandbox to `user_<user_id>` and reuses the container across messages.
-2. **Recent Upload Reuse**: If a file upload was successfully recorded within the last 5 minutes, and a subsequent execution request lacks a `session_id`, the API automatically reuses the last upload's session ID to execute the code in the same container.
-
-These fallbacks minimize container creation overhead, slashing execution latency to milliseconds and reliably maintaining session state.
 
