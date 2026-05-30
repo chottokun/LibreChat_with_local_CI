@@ -1,4 +1,3 @@
-import pytest
 from main import sanitize_id
 
 def test_sanitize_id_none():
