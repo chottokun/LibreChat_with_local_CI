@@ -100,27 +100,23 @@ uv run pytest tests/
 
 ---
 
-## トラブルシューティング（LibreChat 連携エラー）
+## トラブルシューティング（LibreChat 連携エラー・構成調整）
 
-LibreChat との連携時に問題が発生した場合は、以下の手順に従って解決してください。
+LibreChat との連携時に問題が発生した場合は、以下の手順に従って構成を調整してください。
 
 ### 1. `401 Unauthorized (Invalid API Key)` エラーが発生する場合
-かつての LibreChat の一部バージョン（あるいは特定の実験的設定）には、**APIキーをリクエストヘッダーに正しく注入して送信しない（ヘッダーが欠落する）という既知のバグ**が存在していました。
-APIサーバー側のログで `Received key: None, Expected key: your_secret_key` という警告が出ている場合、このバグに該当します。
+APIサーバー側のログで `Received key: None, Expected key: your_secret_key` という警告が出ている場合、LibreChat側からAPIキーのヘッダー送信が欠落しています。
 
-**【現在の解決状況と解決策】**:
-最新の LibreChat（v0.8.4-rc1 以降）においては、このヘッダー注入バグは**上流（公式）で修正済み**です。
-* 現在は `LIBRECHAT_CODE_API_KEY` を設定した状態でのセキュアな認証付き連携が標準で正常動作します。
-* もし古いビルドや特定のカスタムエージェント環境を利用しており、依然としてAPIログに上記の警告が出て連携できない場合に限り、暫定の回避策として `.env` ファイルに以下を追記してAPIキー検証をスキップさせることが有効です（ローカルネットワーク内であれば安全です）。
-  ```env
-  DISABLE_CODE_API_AUTH=true
-  ```
-  設定後、コンテナを再ビルド・再起動して変更を反映します：
-  ```bash
-  docker compose -f docker-compose.yml -f docker-compose.librechat.yml build --no-cache code-interpreter-api
-  docker compose -f docker-compose.yml -f docker-compose.librechat.yml up -d --force-recreate
-  ```
-
+**【対処法】**:
+APIキー認証を一時的に無効化（スキップ）することで回避可能です。`.env` ファイルに以下の設定を追記してください（Dockerブリッジ等、ローカルネットワーク内であれば安全に機能します）。
+```env
+DISABLE_CODE_API_AUTH=true
+```
+設定後、コンテナを再ビルド・再起動して変更を反映します：
+```bash
+docker compose -f docker-compose.yml -f docker-compose.librechat.yml build --no-cache code-interpreter-api
+docker compose -f docker-compose.yml -f docker-compose.librechat.yml up -d --force-recreate
+```
 
 ### 2. 外部からポート接続ができない場合（3000番ポートへの変更）
 外部PCやネットワーク内の他の端末から LibreChat にアクセスできない場合、デフォルトの `3080` ポートではなく、ポート **`3000`** で待ち受けるようマッピングを変更します。
@@ -135,10 +131,9 @@ APIサーバー側のログで `Received key: None, Expected key: your_secret_ke
   ```
 
 ### 3. Ollama モデルが UI の選択メニューに反映されない場合
-`librechat.yaml` で `endpoints.ollama` を直接定義すると、Zod バリデーションエラー（構文エラー）が発生し、設定全体の読み込みが壊れる原因になります。
-また、Ollama が別プロジェクトの Docker ネットワークで動いている場合、ホスト名 `ollama` では名前解決できません。
+`librechat.yaml` で `endpoints.ollama` を直接定義すると、Zod バリデーションエラー（構文エラー）が発生し、設定全体の読み込みが壊れる原因になります。また、Ollama が別プロジェクトの Docker ネットワークで動いている場合、ホスト名 `ollama` では名前解決できません。
 
-**【解決策】**:
+**【対処法】**:
 Ollama は標準で OpenAI 互換の API エンドポイントを提供しているため、`librechat.yaml` の `endpoints.custom`（OpenAI互換リスト）に統合するのが最も確実です。
 1. **`librechat.yaml` の修正**:
    ```yaml
@@ -170,29 +165,12 @@ Ollama は標準で OpenAI 互換の API エンドポイントを提供してい
   docker compose -f docker-compose.yml -f docker-compose.librechat.yml up -d
   ```
 
-### 4. 日本語ファイル名の完全サポート（文字化けバグの解決と仕組み）
-かつての LibreChat 上流（および Node.js の `multer`/`busboy` ミドルウェア仕様）では、ブラウザから非ASCII文字（日本語等）を含むファイルをアップロードした際に、ファイル名が文字化け（Latin1誤解釈）したり、アンダースコア（`_`）に強制サニタイズされたりする課題が存在しました（Issue #8792）。
+### 4. システム内部仕様および各種バグ解決リファレンス
+文字コードの処理仕様やセッションID欠落に対するAPIの自動防衛機構など、本システム固有の技術的仕様については、将来の開発継続および機能追加の参考として以下の専用設計書を参照してください。
 
-**現在の解決状況と仕組み**:
-現在利用されている LibreChat のバージョン（v0.8.4以降のファイルシステム設計）においては、この問題が完全に回避され、**日本語ファイル名がコンテナ（RCE）内でも完全に維持されて動作する**ようになっています。この連携の背後には、以下の強固な設計が存在します。
+* **[日本語ファイル名の処理仕様と設計リファレンス](file://./docs/librechat_japanese_filename_bug.md)**: 
+  LibreChatからプロキシされるUTF-8オリジナルファイル名の中継仕様、およびコンテナ内でのUTF-8ロケール（Matplotlib等）による文字化け回避設計の技術仕様。
+* **[セッションID解決仕様と自動フォールバック設計リファレンス](file://./docs/librechat_session_id_bug_analysis.md)**:
+  上流ツールからのセッションID欠落挙動に対し、本API側で自動的に行う「`user_id` によるバインド」「直前5分間セッション再利用キャッシュ」による状態維持とミリ秒起動を実現しているフォールバック設計仕様。
 
-1. **上流（LibreChat）のプロキシ転送の改善**:
-   LibreChatは、ローカルディスク保存時の安全性を確保するためにファイルシステム上では一時的にサニライズされた名前を使用しますが、データベース（MongoDB）側には「ユーザーがアップロードしたオリジナルの日本語ファイル名」をUTF-8で保持しています。そして、当RCE APIの `/upload` エンドポイントへファイルを転送（プロキシ）する際、**データベースから引き出したオリジナルの日本語名（UTF-8）をマルチパートリクエストの filename パラメータに設定して送信する設計**になりました。
-2. **本API側の受け入れ設計**:
-   API（FastAPI）側の `UploadFile` は、この転送されてきた UTF-8 ファイル名をデコードして `f.filename` に正しく復元します。本APIはこれに無駄なサニタイズや強制置換をかけず、オリジナルの名前のままコンテナの作業用ボリューム（`/mnt/data`）に配置します。
-3. **RCEコンテナ内のUTF-8ロケール**:
-   `Dockerfile.rce` でロケール環境変数（`LANG=C.UTF-8`, `PYTHONUTF8=1`）を強制設定しているため、コンテナのOSおよびPythonランタイムが日本語ファイル名を正しく処理でき、ユーザープログラムからファイルエラーにならずに直接読み書き（例: `open('日本語ファイル名.txt')`）できます。
-4. **ダウンロード時の RFC 5987 準拠**:
-   RCEから結果ファイルをダウンロードする際、APIは RFC 5987 に完全準拠した `Content-Disposition: attachment; filename*=UTF-8''...` ヘッダーを生成して返却するため、ブラウザ側でも日本語ファイル名が文字化けせずに復元されます。
-
-
-### 5. セッションID欠落によるコンテナの頻繁な再生成問題
-ファイルを添付せずにコードを実行する際、LibreChatのクライアント側モジュール（`@librechat/agents`）がAPIリクエストのトップレベルで `session_id` を送信しないという仕様上の挙動があります。このため、リクエストごとに新しいコンテナが起動され、数秒の起動オーバーヘッドや状態（変数や作成されたファイル）の消失が発生する問題があります。
-
-**本API（Custom RCE）側の自動フォールバック機能**:
-本APIでは、この上流側の制限に対処するため、複数のフォールバック機構を内蔵しています（特別な設定変更は不要です）。
-1. **`user_id` によるバインド**: リクエストに `user_id` が含まれている場合、自動的に `user_<user_id>` をセッションIDとしてバインドし、コンテナを再利用します。
-2. **直前セッションの再利用**: 直前5分以内にファイルのアップロード成功実績があり、かつ実行リクエストで `session_id` が欠落している場合、直前のアップロードセッションIDを自動で再利用し、同一コンテナ内でコードを実行します。
-
-これにより、コンテナの無駄な再生成が抑制され、起動レイテンシがミリ秒単位に低減し、セッション間の状態が安定して維持されます。
 

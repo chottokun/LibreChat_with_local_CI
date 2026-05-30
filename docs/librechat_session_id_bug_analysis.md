@@ -1,85 +1,59 @@
-# Bug Report: LibreChat Code Interpreter Session ID Omission
+# セッションID解決仕様と自動フォールバック設計リファレンス
 
-## 1. Description
+本ドキュメントは、LibreChatのクライアント側ツールにおいて発生する仕様上の制限（セッションIDの欠落）に対し、本RCE API（Custom RCE）がどのように自動フォールバックを実行し、状態（変数やファイルシステム）の維持と超高速なコンテナ再利用（ミリ秒起動）を実現しているかの内部設計をまとめた技術リファレンスです。
 
-There is a critical design flaw in the official LibreChat `@librechat/agents` package that causes the `session_id` to be omitted from the request payload during certain code execution flows.
+セッションの寿命管理（TTL）、並列セッション制限の拡張、あるいは新規エンドポイントの追加など、将来の開発継続時に参照すべき設計要件を定義します。
 
-When a user initiates code execution **without attaching any files**, the client-side tool logic fails to include the top-level `session_id` property in the POST request to the `/exec` endpoint.
+---
 
-## 2. Impact
+## 1. 上流（LibreChat）のセッションID送信仕様と現状の課題
 
-This omission causes the Code Interpreter API to:
-1.  Assume every request is from a brand-new, independent session.
-2.  Spin up a completely fresh Docker container for every single message.
-3.  **Performance Degresson**: Launches can take 2-3 seconds, leading to a "heavy" or "slow" user experience.
-4.  **State Loss**: Variables or files created in one turn are not persisted to the next turn, as the container is different each time.
+LibreChatのエージェントおよびツール連携パッケージ（`@librechat/agents` 内の `CodeExecutor.ts`）には、以下のリクエスト仕様が存在します。
 
-## 3. Root Cause Analysis
+* **ファイルレス実行時のID欠落**:
+  ユーザーがファイルを添付せずにチャット中でプログラムコードのみを実行する際、クライアント側ツールは `session_id` をAPIリクエストボディのルートレベルから完全に除外して POST リクエスト（`/exec`）を送信します。
+* **想定される深刻な課題**:
+  API側が素直にこのリクエストを受け取ると、毎メッセージごとに「新規セッション」であると誤認します。結果として、毎ターン新しいDockerコンテナを起動するため、**数秒におよぶ起動レイテンシ**が発生し、さらに前ターンで定義された変数や作成されたファイルといった**状態（ステート）が完全に喪失**してしまいます。
 
-Analysis of `@librechat/agents/src/tools/CodeExecutor.ts`:
+---
 
-```typescript
-// Line 124 in @librechat/agents (v0.8.3-rc1)
-const postData: Record<string, unknown> = {
-  lang,
-  code,
-  ...rest,
-  ...params,
-};
+## 2. API側（`main.py`）の自動フォールバック設計
 
-// ... session_id is extracted but only used for file lookups
-const { session_id, _injected_files } = (config.toolCall ?? {}) as {
-  session_id?: string;
-  _injected_files?: t.CodeEnvFile[];
-};
+本APIは、上流側のこの制約をカバーし、完全に意識させない状態でステートフルかつ高速な実行環境を提供するために、以下の**3重の自動フォールバック機構**を内蔵しています。
 
-// ... session_id is NEVER added to postData at the root level!
+```mermaid
+graph TD
+    Request[execリクエスト到達] --> CheckSID{session_idは存在するか?}
+    CheckSID -- Yes --> MapSID[リアルUUIDにデコードして実行]
+    CheckSID -- No --> CheckFiles{files配列はあるか?}
+    CheckFiles -- Yes --> ExtFiles[添付ファイルメタデータから救出]
+    CheckFiles -- No --> CheckUID{user_idはあるか?}
+    CheckUID -- Yes --> BindUID[user_user_id に強制バインド]
+    CheckUID -- No --> CheckCache{5分以内にアップロード実績あり?}
+    CheckCache -- Yes --> UseCache[直前アップロードIDを再利用]
+    CheckCache -- No --> GenNew[新規NanoIDを生成]
 ```
 
-The code fails to perform `postData.session_id = session_id;`.
+### ① 添付ファイルメタデータからの救出
+ルートレベルの `session_id` が空であっても、`req.files` 配列の要素内に存在する `session_id` や `storage_session_id` を最優先で走査し、セッションIDを特定してマッピングします。
 
-## 4. Implemented Fix (Workaround)
+### ② `user_id` への強制バインド（中核設計）
+リクエストボディに `user_id` が含まれている場合、セッションIDとして `user_<user_id>` を割り当てて実行コンテナを再利用します。
+* **メリット**: 同一ユーザーからの要求であれば、セッションIDが欠落していても常に同じコンテナにルーティングされます。これにより、チャットセッション間での状態の維持と、コンテナ再起動なしのミリ秒起動が担保されます。
 
-Since the client-side bug is in an external dependency, the Code Interpreter API (`main.py`) has been updated with a robust fallback mechanism.
+### ③ `LAST_UPLOADED_SESSION_ID` による直前アップロード連携
+ファイルをアップロードした直後（5分以内）に、API連携バグやクライアント側ツールの仕様バグによりセッションIDが途切れた実行要求が来た場合、メモリ上にキャッシュされた「直前にアップロードが成功したセッションID」を自動で引き当てて再利用します。
+* **メリット**: 「ファイルをアップロードした直後であるのに、セッションIDの不一致で実行コンテナからファイルが見えない」という問題を完全に防止しています。
 
-### `main.py`
-```python
-# Fallback to user_id to ensure container reuse and improve performance
-if not effective_session_id and req.user_id:
-    effective_session_id = f"user_{req.user_id}"
-```
+---
 
-By using the `user_id` as the session key when the official `session_id` is missing, we ensure that:
--   Containers are reused per user.
--   Latency is reduced from seconds to milliseconds.
--   State persists correctly within a user's context.
+## 3. 将来の開発継続・拡張における設計指針（開発リファレンス）
 
-## 5. Current Status & Verification (As of May 2026)
+今後、本プロジェクトの開発を継続する際には、必ず以下の設計方針を遵守してください。
 
-A detailed investigation was conducted to determine whether this bug still persists in the latest upstream LibreChat release (`ghcr.io/danny-avila/librechat:latest`).
+### ① `effective_session_id` の解決フローの維持
+`/exec` などの新しいエンドポイントを増設する場合、あるいはセッションの割り当てルールを変更する場合は、必ず `main.py` の `run_code` 内で実装されている上記の解決フロー（`files` -> `user_id` -> `LAST_UPLOADED_SESSION_ID`）を通した上で、`real_session_id` を特定する構造を崩さないでください。
 
-### 5.1. Findings
-**Conclusion**: This bug **still persists (unresolved)** in the official upstream LibreChat repository. The client-side `session_id` omission during fileless execution remains a known limitation of the `@librechat/agents` (v0.8.4-rc1 and subsequent builds).
-
-### 5.2. Technical Evidence
-1.  **Upstream Code Analysis**:
-    A review of recent commits and Pull Requests in the [danny-avila/LibreChat](https://github.com/danny-avila/LibreChat) repository shows that while several PRs have addressed API key header injections (Issue #12889) and `bash_tool` integration, no changes have been merged to map the top-level `session_id` in the `postData` construction inside `CodeExecutor.ts` for fileless flows.
-2.  **API Request Ingestion Logs**:
-    During local runtime verification, sending a fileless code execution request from the LibreChat Agent UI resulted in the following backend payload receipt at the `/exec` endpoint:
-    ```json
-    {
-      "code": "print('hello')",
-      "lang": "py",
-      "user_id": "6657c9a5fb..."
-      // session_id is completely absent from the payload!
-    }
-    ```
-    This confirms that the API continues to receive payloads lacking the root `session_id`.
-
-### 5.3. Implication
-Because the upstream bug remains active, our custom API-side fallbacks (the `user_id` fallback and the `LAST_UPLOADED_SESSION_ID` cache lookup) are **absolutely vital** to prevent severe latency degradation and loss of runtime state for users. Without these workarounds, the local RCE integration would degrade to a stateless, high-latency execution loop.
-
-## 6. References
-- [Issue location in @librechat/agents](https://github.com/danny-avila/LibreChat/blob/main/packages/agents/src/tools/CodeExecutor.ts)
-- [Project Documentation](file://./docs/librechat_integration_guide.md)
-
+### ② クリーンアップ寿命（TTL）との整合性
+フォールバックによって長期間維持されるコンテナ（`user_<user_id>` など）は、放置されるとリソースを消費し続けるため、`KernelManager.cleanup_sessions()` による自動クリーンアップ（`RCE_SESSION_TTL` 経過後の自動停止・削除）が非常に重要です。
+セッションの割り当て仕様を拡張する際は、必ずクリーンアップ監視ループが正しく機能し、ゾンビコンテナを作らない安全設計を維持してください。
