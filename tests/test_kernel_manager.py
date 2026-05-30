@@ -24,6 +24,22 @@ def kernel_manager():
     km.active_kernels = {} # Clear it for each test
     return km
 
+def test_kernel_manager_init():
+    """
+    KernelManager の新規インスタンス作成時に、
+    初期状態（active_kernels, lock, nanoid_to_session, session_to_nanoid, file_id_map）が
+    正しく空の辞書やスレッドロックオブジェクトとして構成されることを検証します。
+    """
+    km = KernelManager()
+    assert km.active_kernels == {}
+    
+    # 異なる Python バージョンとの互換性を確保するため hasattr でロックインターフェースを確認
+    assert hasattr(km.lock, 'acquire')
+    assert hasattr(km.lock, 'release')
+    assert km.nanoid_to_session == {}
+    assert km.session_to_nanoid == {}
+    assert km.file_id_map == {}
+
 def test_get_or_create_container_running(kernel_manager):
     # Setup
     session_id = "test_session"
