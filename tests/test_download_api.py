@@ -193,3 +193,79 @@ def test_download_file_query_not_found():
 
         assert response.status_code == 404
         assert response.json()["detail"] == "File not found"
+
+
+def test_download_session_file_alternate_routes():
+    """
+    パスパラメータを用いるすべてのダウンロードルート（/api/files/code/download, /download, /run/download）が
+    正しくマッピングされ、同様に動作することを検証します。
+    """
+    routes = [
+        "/api/files/code/download/s/f.txt",
+        "/download/s/f.txt",
+        "/run/download/s/f.txt"
+    ]
+
+    with patch("main.RCE_DATA_DIR_HOST", None), \
+         patch.object(kernel_manager, 'download_file') as mock_download:
+        mock_download.return_value = (b"alternate route content", 123.0)
+
+        for route in routes:
+            response = client.get(route, headers={"X-API-Key": API_KEY})
+            assert response.status_code == 200
+            assert response.content == b"alternate route content"
+
+
+def test_download_binary_mime_type():
+    """
+    バイナリファイル（.binなど）がダウンロードされた場合、
+    MIMEタイプが application/octet-stream となり、Content-Disposition が attachment になることを検証します。
+    """
+    session_id = "binary_session"
+    filename = "data.bin"
+    content = b"\x00\x01\x02\x03"
+
+    with patch("main.RCE_DATA_DIR_HOST", None), \
+         patch.object(kernel_manager, 'download_file') as mock_download:
+        mock_download.return_value = (content, 12345.0)
+
+        response = client.get(
+            f"/download/{session_id}/{filename}",
+            headers={"X-API-Key": API_KEY}
+        )
+
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "application/octet-stream"
+        assert response.headers["content-disposition"].startswith("attachment")
+
+
+def test_download_non_ascii_filename():
+    """
+    日本語などの非ASCII文字ファイル名（例: テスト.txt）をダウンロードした際に、
+    Content-Disposition ヘッダーにおいて正しく RFC 5987 に従ってパーセントエンコーディングされ、
+    ASCIIへの安全なフォールバック（filename=".txt"）が行われることを検証します。
+    """
+    from urllib.parse import quote
+    session_id = "non_ascii_session"
+    filename = "テスト.txt"
+    content = b"japanese file content"
+
+    with patch("main.RCE_DATA_DIR_HOST", None), \
+         patch.object(kernel_manager, 'download_file') as mock_download:
+        mock_download.return_value = (content, 12345.0)
+
+        response = client.get(
+            f"/download/{session_id}/{filename}",
+            headers={"X-API-Key": API_KEY}
+        )
+
+        assert response.status_code == 200
+        cd = response.headers["Content-Disposition"]
+        
+        # ASCII文字のみのフォールバックの確認
+        assert 'filename=".txt"' in cd
+        
+        # UTF-8 URLエンコードの確認 (テスト.txt -> %E3%83%86%E3%82%B9%E3%83%88.txt)
+        expected_encoded = quote(filename)
+        assert f"filename*=utf-8''{expected_encoded}" in cd
+
