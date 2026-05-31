@@ -20,3 +20,8 @@ test_upload.txt
 
 #
 .antigravitycli/
+
+# Dynamically generated certificates
+root.crt
+*.crt
+
