@@ -25,9 +25,9 @@ def test_caddyfile_exists_and_configured():
     assert "blue-two.local:8443" in content, "Caddyfile に blue-two.local:8443 の定義がありません。"
     assert "reverse_proxy sandpack-bundler:80" in content, "Caddyfile に sandpack-bundler:80 へのリバースプロキシ設定がありません。"
     
-    # tls internal 設定の存在確認
-    tls_occurrences = content.count("tls internal")
-    assert tls_occurrences >= 2, f"Caddyfile 内に 'tls internal' が2箇所以上必要ですが、{tls_occurrences}箇所しかありません。"
+    # tls 設定の存在確認 (自己署名、またはカスタムCAをサポートする形式)
+    assert "tls " in content, "tls 設定が見つかりません。"
+    assert "{$CUSTOM_CERT_PATH:internal}" in content, "ハイブリッド TLS 設定が見つかりません。"
 
 def test_docker_compose_caddy_service():
     """
