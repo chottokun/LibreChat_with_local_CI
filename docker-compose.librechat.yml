@@ -112,6 +112,28 @@ services:
     networks:
       - librechat-network
 
+  # ---------------------------------------------------------------------------
+  # Caddy Reverse Proxy Service (For SSL/TLS support in Phase 2 & 3)
+  # ---------------------------------------------------------------------------
+  caddy:
+    image: caddy:latest
+    container_name: caddy
+    restart: always
+    ports:
+      - "443:443"
+      - "8443:8443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy-data:/data
+      - caddy-config:/config
+    profiles:
+      - ssl-mode  # ★「ssl-mode」プロファイル指定時のみコンテナを起動する
+    networks:
+      - librechat-network
+    depends_on:
+      - librechat
+      - sandpack-bundler
+
 networks:
   librechat-network:
     driver: bridge
@@ -122,3 +144,5 @@ volumes:
   mongodb-data:
   meili-data:
   ollama-data:
+  caddy-data:
+  caddy-config:
