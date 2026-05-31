@@ -122,8 +122,12 @@ services:
     ports:
       - "443:443"
       - "8443:8443"
+    environment:
+      - CUSTOM_CERT_PATH=${CUSTOM_CERT_PATH:-internal}
+      - CUSTOM_KEY_PATH=${CUSTOM_KEY_PATH:-internal}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile
+      - ./certs:/certs:ro
       - caddy-data:/data
       - caddy-config:/config
     profiles:

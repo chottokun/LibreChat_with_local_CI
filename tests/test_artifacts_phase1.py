@@ -40,7 +40,8 @@ def test_env_librechat_sandpack_bundler_url_phase1():
         
     # 説明文の検証
     assert "【フェーズ1: 非SSL環境 (デフォルト)】" in content, "フェーズ1の説明が .env.librechat に含まれていません。"
-    assert "【フェーズ2・3: SSL環境 (HTTPS移行時)】" in content, "フェーズ2・3の説明が .env.librechat に含まれていません。"
+    assert "【フェーズ2: 自己署名SSLテスト環境】" in content, "フェーズ2の説明が .env.librechat に含まれていません。"
+    assert "【フェーズ3: オンプレミス本番/社内CA証明書の適用】" in content, "フェーズ3の説明が .env.librechat に含まれていません。"
     
     # SANDPACK_BUNDLER_URL の設定が有効化されていないことを検証
     # 有効な行（コメントアウトされていない行）で SANDPACK_BUNDLER_URL に値が設定されているか確認
