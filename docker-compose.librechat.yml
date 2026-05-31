@@ -101,14 +101,16 @@ services:
   # ---------------------------------------------------------------------------
   # Sandpack Bundler Service (For offline/local Artifacts rendering)
   # ---------------------------------------------------------------------------
-  # sandpack-bundler:
-  #   image: ghcr.io/librechat-ai/codesandbox-client/bundler:latest
-  #   container_name: sandpack-bundler
-  #   restart: always
-  #   ports:
-  #     - "8080:80"
-  #   networks:
-  #     - librechat-network
+  sandpack-bundler:
+    image: ghcr.io/librechat-ai/codesandbox-client/bundler:latest
+    container_name: sandpack-bundler
+    restart: always
+    ports:
+      - "8080:80"
+    profiles:
+      - ssl-mode  # ★「ssl-mode」プロファイル指定時のみコンテナを起動する
+    networks:
+      - librechat-network
 
 networks:
   librechat-network:
