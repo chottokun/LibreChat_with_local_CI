@@ -2,14 +2,18 @@
 :443, blue-two.local:443 {
     reverse_proxy librechat:3080
     
-    # 環境変数でカスタム証明書のパスが指定されている場合は適用、なければ internal (自己署名)
-    tls {$CUSTOM_CERT_PATH:internal} {$CUSTOM_KEY_PATH:internal}
+    # 自己署名証明書の自動生成（デフォルト）
+    # ※社内CA等のカスタム証明書を使用する場合は、コメントアウトを切り替えてください。
+    tls internal
+    # tls /certs/librechat.crt /certs/librechat.key
 }
 
 # Sandpack BundlerのHTTPS化（ポート8443）
 :8443, blue-two.local:8443 {
     reverse_proxy sandpack-bundler:80
     
-    # 環境変数でカスタム証明書のパスが指定されている場合は適用、なければ internal (自己署名)
-    tls {$CUSTOM_CERT_PATH:internal} {$CUSTOM_KEY_PATH:internal}
+    # 自己署名証明書の自動生成（デフォルト）
+    # ※社内CA等のカスタム証明書を使用する場合は、コメントアウトを切り替えてください。
+    tls internal
+    # tls /certs/librechat.crt /certs/librechat.key
 }
