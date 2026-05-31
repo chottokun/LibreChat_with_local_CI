@@ -10,21 +10,18 @@ ENV_LIBRECHAT_PATH = os.path.join(BASE_DIR, ".env.librechat")
 
 def test_onprem_caddyfile_hybrid_tls():
     """
-    Caddyfile 内でカスタム証明書のパス環境変数 {$CUSTOM_CERT_PATH} / {$CUSTOM_KEY_PATH}
-    およびデフォルトの internal (自己署名) フォールバックが正しく構成されているかを検証します。
+    Caddyfile 内に自己署名証明書（tls internal）のデフォルト設定と、
+    マウントされたカスタム証明書（tls /certs/librechat.crt ...）の切替設定が存在することを検証します。
     """
     assert os.path.exists(CADDYFILE_PATH), "Caddyfile が存在しません。"
     
     with open(CADDYFILE_PATH, "r", encoding="utf-8") as f:
         content = f.read()
         
-    # カスタム証明書環境変数の参照と internal フォールバック指定があるかアサート
-    expected_tls_line = "tls {$CUSTOM_CERT_PATH:internal} {$CUSTOM_KEY_PATH:internal}"
-    assert expected_tls_line in content, f"Caddyfile 内に '{expected_tls_line}' の設定が見つかりません。"
-    
-    # 443 および 8443 の両方のブロックに存在することを確認
-    occurrences = content.count(expected_tls_line)
-    assert occurrences >= 2, f"Caddyfile 内のハイブリッド TLS 設定数が不足しています（見つかった数: {occurrences}）。"
+    # デフォルトの tls internal 指定が存在することを確認
+    assert "tls internal" in content, "Caddyfile 内にデフォルトの 'tls internal' 設定がありません。"
+    # カスタム証明書用のパス指定が存在することを確認（コメントアウト状態を含む）
+    assert "tls /certs/librechat.crt /certs/librechat.key" in content, "Caddyfile 内にカスタム証明書適用のプレースホルダーがありません。"
 
 def test_onprem_docker_compose_caddy_mounts_and_envs():
     """

@@ -26,8 +26,7 @@ def test_caddyfile_exists_and_configured():
     assert "reverse_proxy sandpack-bundler:80" in content, "Caddyfile に sandpack-bundler:80 へのリバースプロキシ設定がありません。"
     
     # tls 設定の存在確認 (自己署名、またはカスタムCAをサポートする形式)
-    assert "tls " in content, "tls 設定が見つかりません。"
-    assert "{$CUSTOM_CERT_PATH:internal}" in content, "ハイブリッド TLS 設定が見つかりません。"
+    assert "tls internal" in content, "Caddyfile 内にデフォルトの 'tls internal' 設定がありません。"
 
 def test_docker_compose_caddy_service():
     """
