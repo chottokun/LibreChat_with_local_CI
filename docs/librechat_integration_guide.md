@@ -65,7 +65,7 @@ To make files appear as native, clickable attachment icons in the chat UI, your 
 
 ### Maintenance
 - **Authentication Failures (401 Unauthorized)**:
-  Historically, LibreChat failed to inject the API key header, resulting in `Received key: None` in the API logs. In recent releases (v0.8.4-rc1 and later), this bug is **fully resolved**, and secure authentication works seamlessly. For older, unpatched builds, you can bypass this by setting `DISABLE_CODE_API_AUTH=true` in your `.env` in local network environments.
+  This issue is **fully resolved** in LibreChat `v0.8.6` and later. Please use this verified version. For older, unpatched builds, you can bypass this by setting `DISABLE_CODE_API_AUTH=true` in your `.env` in local network environments.
 
 - **Stateless Execution / Missing Session ID**:
   When users run code without attaching files, the LibreChat client omits the `session_id`. Our custom API automatically mitigates this by binding to `user_<user_id>` or reusing the last uploaded file's session ID (cached for 5 minutes). No extra client configuration is needed.

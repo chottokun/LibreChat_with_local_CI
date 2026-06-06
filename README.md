@@ -85,12 +85,19 @@ LibreChat側の `.env` で `LIBRECHAT_CODE_BASEURL` と `LIBRECHAT_CODE_API_KEY`
 
 ## 開発とテスト
 
-本プロジェクトはテスト駆動開発 (TDD) に基づいて構築されており、100項目以上のテストスイートを備えています。
+本プロジェクトはテスト駆動開発 (TDD) に基づいて構築されており、26ファイル164件以上のテストスイートを備えています。
+
+テストは **2段階** で実行してください:
 
 ```bash
-# テストの実行
-uv run pytest tests/
+# ステップ1: 認証テスト（APIキーを有効にした状態で実行）
+LIBRECHAT_CODE_API_KEY=test-dev-key uv run pytest tests/test_auth_unit.py tests/test_api.py -v
+
+# ステップ2: その他全テスト（認証を無効にした状態で実行）
+LIBRECHAT_CODE_API_KEY=test-dev-key DISABLE_CODE_API_AUTH=true uv run pytest tests/ --ignore=tests/test_auth_unit.py -v
 ```
+
+> **注意**: `DISABLE_CODE_API_AUTH=true` を設定したまま認証テストを実行すると、401 が期待される箇所で 200 が返るため意図的に失敗します。
 
 テスト範囲:
 - API認証およびエンドポイントの整合性
@@ -108,7 +115,8 @@ LibreChat との連携時に問題が発生した場合は、以下の手順に�
 APIサーバー側のログで `Received key: None, Expected key: your_secret_key` という警告が出ている場合、LibreChat側からAPIキーのヘッダー送信が欠落しています。
 
 **【対処法】**:
-APIキー認証を一時的に無効化（スキップ）することで回避可能です。`.env` ファイルに以下の設定を追記してください（Dockerブリッジ等、ローカルネットワーク内であれば安全に機能します）。
+LibreChat `v0.8.6` 以降ではこの問題は修正済みです。本認証済みバージョンを使用してください。
+万が一不具合が発生する場合は、APIキー認証を一時的に無効化（スキップ）することで回避可能です。`.env` ファイルに以下の設定を追記してください（Dockerブリッジ等、ローカルネットワーク内であれば安全に機能します）。
 ```env
 DISABLE_CODE_API_AUTH=true
 ```

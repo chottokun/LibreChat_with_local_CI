@@ -10,6 +10,18 @@ fileConfig:
   uploadDir: ./uploads
 
 endpoints:
+  google:
+    # Google Gemini エンドポイント（GEMINI_API_KEY が設定されている場合のみ有効）
+    apiKey: "${GEMINI_API_KEY}"
+    models:
+      default:
+        - gemini-2.5-flash-preview-05-20
+        - gemini-2.0-flash
+        - gemini-1.5-pro
+      fetch: true
+    titleConvo: true
+    summarize: true
+
   custom:
     - name: "Open AI Compatible"
       apiKey: "${EXTERNAL_API_KEY}"
@@ -20,6 +32,9 @@ endpoints:
       titleConvo: true
       summarize: true
       modelDisplayLabel: "Open AI Compatible"
+      # vLLMサーバーが --enable-auto-tool-choice なしで起動している場合の回避策
+      # tool_choice: "auto" を送信すると 400 エラーになるため除外する
+      dropParams: ["tool_choice"]
 
     - name: "Ollama"
       apiKey: "ollama"
