@@ -22,6 +22,8 @@ def mock_docker_client():
 def kernel_manager():
     km = KernelManager()
     km.active_kernels = {} # Clear it for each test
+    km.nanoid_to_session = {}
+    km.session_to_nanoid = {}
     return km
 
 def test_kernel_manager_init():
@@ -494,3 +496,95 @@ def test_get_or_create_container_generic_exception_during_reload(kernel_manager)
     assert container == new_container
     mock_container.reload.assert_called_once()
     kernel_manager.start_new_container_unlocked.assert_called_once_with(session_id, None)
+
+def test_recover_containers_with_external_id_success(kernel_manager):
+    """Verifies that recover_containers correctly restores NanoID mappings."""
+    # Setup
+    mock_container = MagicMock()
+    mock_container.id = "c_ext"
+    mock_container.labels = {
+        "session_id": "real_uuid",
+        "external_session_id": "nanoid_sid"
+    }
+
+    main.DOCKER_CLIENT.containers.list.return_value = [mock_container]
+
+    # Execute
+    kernel_manager.recover_containers()
+
+    # Assert
+    assert "real_uuid" in kernel_manager.active_kernels
+    assert kernel_manager.nanoid_to_session["nanoid_sid"] == "real_uuid"
+    assert kernel_manager.session_to_nanoid["real_uuid"] == "nanoid_sid"
+    assert kernel_manager.active_kernels["real_uuid"]["container"] == mock_container
+
+def test_recover_containers_inner_exception_with_external_id(kernel_manager):
+    """
+    Targets L434: Specifically triggers an exception when external_session_id is present
+    to ensure the error handler correctly logs the failure and continues.
+    """
+    # Setup
+    mock_container_fail = MagicMock()
+    mock_container_fail.id = "c_fail"
+    mock_container_fail.labels = {
+        "session_id": "sid_fail",
+        "external_session_id": "ext_fail"
+    }
+
+    mock_container_ok = MagicMock()
+    mock_container_ok.id = "c_ok"
+    mock_container_ok.labels = {"session_id": "sid_ok"}
+
+    main.DOCKER_CLIENT.containers.list.return_value = [mock_container_fail, mock_container_ok]
+
+    with patch("main.logger") as mock_logger:
+        # Mock logger.info to fail when processing sid_fail
+        # L430: logger.info("Recovered session %s (external: %s) from container %s", session_id, external_session_id, container.id)
+
+        def logger_side_effect(msg, *args):
+            if args and args[0] == "sid_fail":
+                raise Exception("Forced failure during external recovery log")
+            return None
+
+        mock_logger.info.side_effect = logger_side_effect
+
+        # Execute
+        kernel_manager.recover_containers()
+
+        # Assert
+        # Should have logged the error at L434
+        mock_logger.error.assert_any_call("Failed to recover container %s: %s", "c_fail", ANY)
+
+        # sid_ok should still be recovered despite the previous failure
+        assert "sid_ok" in kernel_manager.active_kernels
+        assert kernel_manager.active_kernels["sid_ok"]["container"] == mock_container_ok
+
+def test_recover_containers_id_access_failure_double_fault_extended(kernel_manager):
+    """
+    Verifies that if container.id access fails during the inner error handler (L434),
+    it is caught by the outer error handler (L436).
+    """
+    # Setup
+    mock_container = MagicMock()
+    # container.id access will fail
+    type(mock_container).id = property(lambda x: exec('raise Exception("ID access failed")'))
+    mock_container.labels = {"session_id": "sid_test"}
+
+    main.DOCKER_CLIENT.containers.list.return_value = [mock_container]
+
+    with patch("main.logger") as mock_logger:
+        # Execute
+        kernel_manager.recover_containers()
+
+        # Assert
+        # The inner recovery will fail at L425 (time.time()) or L432 (logger.info)
+        # Then L434 will try to log container.id, which fails.
+        # Then L436 should catch it.
+        mock_logger.error.assert_any_call("Error during container recovery: %s", ANY)
+        # Verify the exception message in the outer log contains "ID access failed"
+        found_outer_error = False
+        for call in mock_logger.error.call_args_list:
+            if "Error during container recovery" in call.args[0]:
+                if "ID access failed" in str(call.args[1]):
+                    found_outer_error = True
+        assert found_outer_error
