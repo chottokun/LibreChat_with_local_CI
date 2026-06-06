@@ -1,4 +1,5 @@
 import io
+import weakref
 import tarfile
 import logging
 import os
@@ -231,9 +232,20 @@ class SecurityHeadersCORSMiddleware(CORSMiddleware):
                 await send(message)
             await super().__call__(scope, receive, send_with_security)
 
+# CORS configuration
+CORS_ALLOWED_ORIGINS_RAW = os.environ.get("CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:3080")
+CORS_ALLOWED_ORIGINS = []
+for origin in CORS_ALLOWED_ORIGINS_RAW.split(","):
+    origin_cleaned = origin.strip().rstrip("/")
+    if origin_cleaned == "*":
+        logger.error("Wildcard '*' origin is not allowed when credentials are enabled.")
+        raise ValueError("CORS_ALLOWED_ORIGINS cannot contain '*' when allow_credentials is True.")
+    if origin_cleaned:
+        CORS_ALLOWED_ORIGINS.append(origin_cleaned)
+
 app.add_middleware(
     SecurityHeadersCORSMiddleware,
-    allow_origin_regex="https?://.*",
+    allow_origins=CORS_ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -255,6 +267,23 @@ def sanitize_id(id_str: str) -> str:
     # This prevents path traversal and other injection attacks.
     return "".join(c for c in id_str if c.isalnum() or c in ('-', '_'))
 
+class WeakrefRLock:
+    """A wrapper around threading.RLock that supports weak references."""
+    def __init__(self):
+        self._lock = threading.RLock()
+
+    def __enter__(self):
+        return self._lock.__enter__()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return self._lock.__exit__(exc_type, exc_val, exc_tb)
+
+    def acquire(self, blocking=True, timeout=-1):
+        return self._lock.acquire(blocking, timeout)
+
+    def release(self):
+        return self._lock.release()
+
 # 2. Kernel Manager for Session Management
 class KernelManager:
     """
@@ -264,10 +293,22 @@ class KernelManager:
     def __init__(self):
         self.active_kernels = {} # Maps session_id to dict with container and last_accessed
         self.lock = threading.Lock()
+        self.session_locks = weakref.WeakValueDictionary()
+        self.session_locks_lock = threading.Lock()
+        self.pending_sessions = set() # Track sessions currently in the process of starting
         # Mapping: nanoid_session_id -> uuid_session_id and nanoid_file_id -> filename
         self.nanoid_to_session: Dict[str, str] = {}
         self.session_to_nanoid: Dict[str, str] = {}
         self.file_id_map: Dict[str, Dict[str, str]] = {}  # {nanoid_session_id: {nanoid_file_id: filename}}
+
+    def _get_session_lock(self, session_id: str) -> WeakrefRLock:
+        """Gets or creates a session-specific lock."""
+        with self.session_locks_lock:
+            lock = self.session_locks.get(session_id)
+            if lock is None:
+                lock = WeakrefRLock()
+                self.session_locks[session_id] = lock
+            return lock
 
     def resolve_session_id(self, session_id: str) -> str:
         """Resolves a potential nanoid session ID to the real internal session ID."""
@@ -319,40 +360,116 @@ class KernelManager:
             return real_session_id, os.path.basename(real_filename)
 
     def get_or_create_container(self, session_id: str, force_refresh: bool = False, external_session_id: Optional[str] = None):
+        # Fast path: check if session exists and is not being refreshed
         with self.lock:
             if not force_refresh and session_id in self.active_kernels:
                 self.active_kernels[session_id]["last_accessed"] = time.time()
                 return self.active_kernels[session_id]["container"]
 
-            if session_id in self.active_kernels:
-                try:
-                    # Re-fetch or refresh container status
-                    container = self.active_kernels[session_id]["container"]
-                    # If we have an object, we can try to reload it to get fresh status
-                    try:
-                        container.reload()
-                    except docker.errors.NotFound:
-                        # If reload fails, it's gone
-                        del self.active_kernels[session_id]
-                        return self.start_new_container_unlocked(session_id, external_session_id)
+        # Slow path: use session-specific lock to avoid blocking other sessions
+        session_lock = self._get_session_lock(session_id)
+        with session_lock:
+            container_to_refresh = None
+            with self.lock:
+                # Re-check under lock in case it was created/refreshed while waiting for session_lock
+                if not force_refresh and session_id in self.active_kernels:
+                    self.active_kernels[session_id]["last_accessed"] = time.time()
+                    return self.active_kernels[session_id]["container"]
 
-                    if container.status == "running":
-                        self.active_kernels[session_id]["last_accessed"] = time.time()
-                        return container
+                if session_id in self.active_kernels:
+                    container_to_refresh = self.active_kernels[session_id]["container"]
+
+            if container_to_refresh:
+                try:
+                    # Slow Docker API call outside global lock
+                    container_to_refresh.reload()
+                    if container_to_refresh.status == "running":
+                        with self.lock:
+                            if session_id in self.active_kernels:
+                                self.active_kernels[session_id]["last_accessed"] = time.time()
+                        return container_to_refresh
                     else:
-                        # Restart if stopped
-                        container.start()
-                        self.active_kernels[session_id]["last_accessed"] = time.time()
-                        return container
+                        # Slow Docker API call outside global lock
+                        container_to_refresh.start()
+                        with self.lock:
+                            if session_id in self.active_kernels:
+                                self.active_kernels[session_id]["last_accessed"] = time.time()
+                        return container_to_refresh
+                except docker.errors.NotFound:
+                    with self.lock:
+                        self.active_kernels.pop(session_id, None)
+                    # Fall through to create new
                 except Exception:
-                    # Any other error, try to start fresh
-                    del self.active_kernels[session_id]
+                    logger.exception("Error refreshing container for session %s", session_id)
+                    with self.lock:
+                        self.active_kernels.pop(session_id, None)
+                    # Fall through to create new
 
             return self.start_new_container_unlocked(session_id, external_session_id)
 
     def start_new_container(self, session_id: str, external_session_id: Optional[str] = None):
-        with self.lock:
-            return self.start_new_container_unlocked(session_id, external_session_id)
+        session_lock = self._get_session_lock(session_id)
+        with session_lock:
+            # Double check existence and capacity under global lock
+            with self.lock:
+                if session_id in self.active_kernels:
+                    return self.active_kernels[session_id]["container"]
+
+                # Prevent race condition: check active kernels AND currently starting containers
+                if len(self.active_kernels) + len(self.pending_sessions) >= RCE_MAX_SESSIONS:
+                    logger.warning("Max sessions reached: %d (Active: %d, Pending: %d)", 
+                                   RCE_MAX_SESSIONS, len(self.active_kernels), len(self.pending_sessions))
+                    raise HTTPException(status_code=503, detail="Server is at capacity. Please try again later.")
+                
+                # Mark as pending to reserve slot
+                self.pending_sessions.add(session_id)
+
+            # Slow Docker operations outside global lock
+            container = None
+            try:
+                config = self._get_container_config()
+                volumes = self._prepare_volumes(session_id)
+
+                container = DOCKER_CLIENT.containers.run(
+                    image=RCE_IMAGE_NAME,
+                    command="tail -f /dev/null", # Keep alive
+                    detach=True,
+                    remove=True, # Remove when stopped
+                    name=f"rce_{session_id}_{uuid.uuid4().hex[:6]}",
+                    working_dir="/mnt/data",
+                    labels={
+                        "managed_by": RCE_MANAGED_BY_VALUE,
+                        "session_id": session_id,
+                        "external_session_id": external_session_id or ""
+                    },
+                    environment={"PYTHONUNBUFFERED": "1"},
+                    volumes=volumes,
+                    **config
+                )
+                # Ensure workspace exists
+                container.exec_run(cmd=["mkdir", "-p", "/mnt/data"])
+
+                with self.lock:
+                    self.active_kernels[session_id] = {
+                        "container": container,
+                        "last_accessed": time.time()
+                    }
+                    self.pending_sessions.discard(session_id)
+                return container
+            except Exception:
+                logger.exception("Failed to start sandbox for session %s", session_id)
+                with self.lock:
+                    self.pending_sessions.discard(session_id)
+                if container:
+                    try:
+                        container.stop(timeout=2)
+                    except Exception as stop_err:
+                        logger.error("Failed to stop container %s after startup failure: %s", container.id if hasattr(container, "id") else "unknown", stop_err)
+                raise HTTPException(status_code=500, detail="Failed to start sandbox. Please contact an administrator.")
+
+    def start_new_container_unlocked(self, session_id: str, external_session_id: Optional[str] = None):
+        """Deprecated: Use start_new_container instead. Maintained for test compatibility."""
+        return self.start_new_container(session_id, external_session_id)
 
     def _get_container_config(self) -> Dict[str, Any]:
         """Parses resource limits and configuration from environment variables."""
@@ -385,49 +502,6 @@ class KernelManager:
         os.makedirs(session_dir_internal, exist_ok=True)
 
         return {session_dir_host: {'bind': '/mnt/data', 'mode': 'rw'}}
-
-    def start_new_container_unlocked(self, session_id: str, external_session_id: Optional[str] = None):
-        # Enforce max sessions
-        if len(self.active_kernels) >= RCE_MAX_SESSIONS:
-            logger.warning("Max sessions reached: %d", RCE_MAX_SESSIONS)
-            raise HTTPException(status_code=503, detail="Server is at capacity. Please try again later.")
-
-        container = None
-        try:
-            config = self._get_container_config()
-            volumes = self._prepare_volumes(session_id)
-
-            container = DOCKER_CLIENT.containers.run(
-                image=RCE_IMAGE_NAME,
-                command="tail -f /dev/null", # Keep alive
-                detach=True,
-                remove=True, # Remove when stopped
-                name=f"rce_{session_id}_{uuid.uuid4().hex[:6]}",
-                working_dir="/mnt/data",
-                labels={
-                    "managed_by": RCE_MANAGED_BY_VALUE,
-                    "session_id": session_id,
-                    "external_session_id": external_session_id or ""
-                },
-                environment={"PYTHONUNBUFFERED": "1"},
-                volumes=volumes,
-                **config
-            )
-            # Ensure workspace exists
-            container.exec_run(cmd=["mkdir", "-p", "/mnt/data"])
-            self.active_kernels[session_id] = {
-                "container": container,
-                "last_accessed": time.time()
-            }
-            return container
-        except Exception:
-            logger.exception("Failed to start sandbox for session %s", session_id)
-            if container:
-                try:
-                    container.stop(timeout=2)
-                except Exception as stop_err:
-                    logger.error("Failed to stop container %s after startup failure: %s", container.id if hasattr(container, "id") else "unknown", stop_err)
-            raise HTTPException(status_code=500, detail="Failed to start sandbox. Please contact an administrator.")
 
     def recover_containers(self):
         """Scans Docker for existing containers managed by this API and re-adopts them."""
@@ -795,27 +869,22 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
             kernel_manager.file_id_map[nanoid_session] = {}
         # Pre-calculate reverse mapping once to avoid O(N^2) inside the loop
         existing_filenames_to_ids = {v: k for k, v in kernel_manager.file_id_map[nanoid_session].items()}
+
+        # Ensure all current_files have a nanoid mapping (inside lock for atomicity and efficiency)
+        for f in current_files:
+            if f not in existing_filenames_to_ids:
+                nanoid_file = generate_nanoid()
+                kernel_manager.file_id_map[nanoid_session][nanoid_file] = f
+                existing_filenames_to_ids[f] = nanoid_file
     
     for f in current_files:
         mime_type, _ = mimetypes.guess_type(f)
-        # Generate or reuse nanoid for this file
-        if f in existing_filenames_to_ids:
-            nanoid_file = existing_filenames_to_ids[f]
-        else:
-            with kernel_manager.lock:
-                # Double-check inside lock to prevent duplicates
-                current_rev_map = {v: k for k, v in kernel_manager.file_id_map[nanoid_session].items()}
-                if f in current_rev_map:
-                    nanoid_file = current_rev_map[f]
-                else:
-                    nanoid_file = generate_nanoid()
-                    kernel_manager.file_id_map[nanoid_session][nanoid_file] = f
-                existing_filenames_to_ids[f] = nanoid_file
+        nanoid_file = existing_filenames_to_ids[f]
 
         structured_files.append({
             "id": nanoid_file,
             "name": f,
-            "url": f"/api/files/code/download/{nanoid_session}/{nanoid_file}",
+            "url": f"/api/files/code/download/{sid}/{nanoid_file}",
             "type": mime_type or "application/octet-stream"
         })
     
@@ -826,7 +895,7 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
         "output": result["stdout"],
         "result": result["stdout"],
         "status": "success" if result["exit_code"] == 0 else "error",
-        "session_id": nanoid_session,
+        "session_id": sid,
         "files": structured_files,
         "images": [] # Placeholder for future image capture implementation
     }
@@ -882,9 +951,9 @@ async def upload_files(
 
         # 直近でアップロードに成功したセッション情報をグローバルに記録
         global LAST_UPLOADED_SESSION_ID, LAST_UPLOAD_TIME
-        LAST_UPLOADED_SESSION_ID = nanoid_session
+        LAST_UPLOADED_SESSION_ID = sid
         LAST_UPLOAD_TIME = time.time()
-        logger.info("Recorded last uploaded session ID: %s", nanoid_session)
+        logger.info("Recorded last uploaded session ID: %s", sid)
 
         uploaded_files = []
         with kernel_manager.lock:
@@ -906,7 +975,7 @@ async def upload_files(
         # Standardize response structure
         res = {
             "message": "success",
-            "session_id": nanoid_session,
+            "session_id": sid,
             "files": uploaded_files
         }
         # Flatten the first file for root-level access (LibreChat compatibility)

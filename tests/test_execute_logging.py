@@ -69,3 +69,24 @@ def test_execute_code_logs_exception_on_retry_failure(kernel_manager, caplog):
                 assert excinfo.value.status_code == 500
                 assert "Error executing code in session test_retry_log_session" in caplog.text
                 assert "Retry failure" in caplog.text
+
+def test_execute_code_logs_exception_on_exec_run_generic_error(kernel_manager, caplog):
+    """Test that KernelManager.execute_code logs the exception when container.exec_run raises a generic error."""
+    session_id = "test_exec_run_fail_session"
+    code = "print('hello')"
+
+    mock_container = MagicMock()
+    # Mock exec_run to raise a generic Exception
+    mock_container.exec_run.side_effect = Exception("Internal exec_run failure")
+
+    with patch.object(kernel_manager, 'get_or_create_container', return_value=mock_container):
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(HTTPException) as excinfo:
+                kernel_manager.execute_code(session_id, code)
+
+            assert excinfo.value.status_code == 500
+            assert "An internal error occurred" in excinfo.value.detail
+
+            # Verify logging
+            assert f"Error executing code in session {session_id}" in caplog.text
+            assert "Internal exec_run failure" in caplog.text
