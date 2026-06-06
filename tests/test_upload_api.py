@@ -96,12 +96,13 @@ def test_upload_no_files_fails():
     assert "No files provided" in response.json()["detail"]
 
 def test_upload_unauthorized():
-    response = client.post(
-        "/upload",
-        headers={"X-API-Key": "wrong-key"},
-        files=[("files", ("test.txt", b"content"))]
-    )
-    assert response.status_code == 401
+    with patch("main.DISABLE_AUTH", False):
+        response = client.post(
+            "/upload",
+            headers={"X-API-Key": "wrong-key"},
+            files=[("files", ("test.txt", b"content"))]
+        )
+        assert response.status_code == 401
 
 def test_upload_priority_files_over_file():
     # Tests that 'files' takes priority over 'file' if both are present
