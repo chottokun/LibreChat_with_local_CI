@@ -51,8 +51,8 @@ def test_session_id_mapping_consistency(mock_docker):
     # In /upload, it should respect the provided sid if it's the first time seeing it
     assert response_upload.json()["session_id"] == test_sid_upload
 
-    # 2. Test /exec with a new session ID
-    test_sid_exec = "test-session-exec"
+    # 2. Test /exec with a new session ID (using spaces to verify respect for provided ID)
+    test_sid_exec = "test session exec"
     response_exec = client.post(
         "/exec",
         json={
@@ -62,6 +62,7 @@ def test_session_id_mapping_consistency(mock_docker):
         headers=headers
     )
     assert response_exec.status_code == 200
+    # FIX: it should now respect test_sid_exec!
     returned_sid = response_exec.json()["session_id"]
 
     print(f"Provided SID for /exec: {test_sid_exec}")
