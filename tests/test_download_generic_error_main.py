@@ -1,7 +1,6 @@
 from unittest.mock import patch
 from fastapi.testclient import TestClient
 import os
-import main
 from main import app, API_KEY
 
 @patch("main.RCE_DATA_DIR_HOST", "some/host/path")
