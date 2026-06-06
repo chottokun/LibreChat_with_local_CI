@@ -6,12 +6,10 @@ from main import KernelManager
 
 @pytest.fixture(autouse=True)
 def mock_docker_client():
-    """Replace main.DOCKER_CLIENT with a MagicMock for each test."""
+    """Replace main.DOCKER_CLIENT with a MagicMock for each test using patch."""
     mock_client = MagicMock()
-    original = main.DOCKER_CLIENT
-    main.DOCKER_CLIENT = mock_client
-    yield mock_client
-    main.DOCKER_CLIENT = original
+    with patch("main.DOCKER_CLIENT", mock_client):
+        yield mock_client
 
 @pytest.fixture
 def kernel_manager():
@@ -22,11 +20,12 @@ def kernel_manager():
 def test_start_new_container_unlocked_exec_failure(kernel_manager, mock_docker_client):
     """
     Test that KernelManager.start_new_container_unlocked correctly raises a 500 HTTPException
-    when the container.exec_run call fails during initialization.
+    when the container.exec_run call fails during initialization, and that the container is stopped.
     Verifies main.py:403 error handler.
     """
     session_id = "test_session"
     mock_container = MagicMock()
+    mock_container.id = "mock_container_id_123"
     mock_docker_client.containers.run.return_value = mock_container
 
     # Mock exec_run to raise an exception
@@ -43,6 +42,9 @@ def test_start_new_container_unlocked_exec_failure(kernel_manager, mock_docker_c
         mock_logger.exception.assert_called_once_with(
             "Failed to start sandbox for session %s", session_id
         )
+
+        # Verify that container was stopped due to exec_run failure
+        mock_container.stop.assert_called_once_with(timeout=2)
 
     # Verify that the session was NOT added to active_kernels (or was removed)
     assert session_id not in kernel_manager.active_kernels

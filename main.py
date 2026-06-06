@@ -373,6 +373,7 @@ class KernelManager:
             logger.warning("Max sessions reached: %d", RCE_MAX_SESSIONS)
             raise HTTPException(status_code=503, detail="Server is at capacity. Please try again later.")
 
+        container = None
         try:
             config = self._get_container_config()
             volumes = self._prepare_volumes(session_id)
@@ -402,6 +403,11 @@ class KernelManager:
             return container
         except Exception:
             logger.exception("Failed to start sandbox for session %s", session_id)
+            if container:
+                try:
+                    container.stop(timeout=2)
+                except Exception as stop_err:
+                    logger.error("Failed to stop container %s after startup failure: %s", container.id if hasattr(container, "id") else "unknown", stop_err)
             raise HTTPException(status_code=500, detail="Failed to start sandbox. Please contact an administrator.")
 
     def recover_containers(self):
