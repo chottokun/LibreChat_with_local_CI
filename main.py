@@ -778,10 +778,15 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
         real_session_id, nanoid_session = kernel_manager.get_or_create_session_mapping(sid)
     
     # Run in sandbox
-    result = kernel_manager.execute_code(real_session_id, req.code, lang=(req.lang or "python").lower(), external_session_id=nanoid_session)
-    
+    result = await asyncio.to_thread(
+        kernel_manager.execute_code,
+        real_session_id,
+        req.code,
+        lang=(req.lang or "python").lower(),
+        external_session_id=nanoid_session
+    )
     # List generated files and format them for LibreChat native ingestion
-    current_files = kernel_manager.list_files(real_session_id, external_session_id=nanoid_session)
+    current_files = await asyncio.to_thread(kernel_manager.list_files, real_session_id, external_session_id=nanoid_session)
     structured_files = []
     
     # Initialize file mapping for this session
@@ -926,7 +931,7 @@ async def list_session_files(session_id: str, key: str = Security(get_api_key)):
     with kernel_manager.lock:
         nanoid_session = kernel_manager.session_to_nanoid.get(real_session_id, s_sid)
 
-    files = kernel_manager.list_files(real_session_id, external_session_id=nanoid_session)
+    files = await asyncio.to_thread(kernel_manager.list_files, real_session_id, external_session_id=nanoid_session)
     
     file_list = []
     with kernel_manager.lock:
@@ -1004,7 +1009,7 @@ async def download_session_file(
             tmp_filepath = filepath
         else:
             # Fallback to Docker API (get_archive)
-            in_memory_content, mtime = kernel_manager.download_file(real_session_id, real_filename)
+            in_memory_content, mtime = await asyncio.to_thread(kernel_manager.download_file, real_session_id, real_filename)
     except HTTPException:
         raise
     except Exception as e:
