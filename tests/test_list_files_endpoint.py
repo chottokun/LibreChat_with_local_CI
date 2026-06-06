@@ -40,11 +40,12 @@ def test_list_files_success(mock_list_files):
 @patch("main.kernel_manager.list_files")
 def test_list_files_unauthorized(mock_list_files):
     session_id = "test_session_123"
-    response = client.get(
-        f"/files/{session_id}",
-        headers={"X-API-Key": "wrong_key"}
-    )
-    assert response.status_code == 401
+    with patch("main.DISABLE_AUTH", False):
+        response = client.get(
+            f"/files/{session_id}",
+            headers={"X-API-Key": "wrong_key"}
+        )
+        assert response.status_code == 401
 
 @patch("main.kernel_manager.list_files")
 def test_list_files_empty(mock_list_files):

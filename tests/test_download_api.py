@@ -151,12 +151,13 @@ def test_download_session_file_nanoid_resolution():
 
 def test_download_file_query_unauthorized():
     """無効な API キーが与えられた場合に 401 Unauthorized エラーを返すことを検証します。"""
-    response = client.get(
-        "/download",
-        params={"session_id": "test", "filename": "test.txt"},
-        headers={"X-API-Key": "wrong_key"}
-    )
-    assert response.status_code == 401
+    with patch("main.DISABLE_AUTH", False):
+        response = client.get(
+            "/download",
+            params={"session_id": "test", "filename": "test.txt"},
+            headers={"X-API-Key": "wrong_key"}
+        )
+        assert response.status_code == 401
 
 def test_download_file_query_missing_params():
     """必須のクエリパラメータが不足している場合に 422 Unprocessable Entity エラーを返すことを検証します。"""
