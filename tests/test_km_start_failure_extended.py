@@ -1,7 +1,6 @@
 import pytest
 from unittest.mock import MagicMock, patch
 from fastapi import HTTPException
-import main
 from main import KernelManager
 
 @pytest.fixture(autouse=True)

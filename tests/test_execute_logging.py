@@ -7,7 +7,6 @@ from unittest.mock import MagicMock, patch
 with patch("docker.from_env") as mock_from_env:
     os.environ.setdefault("LIBRECHAT_CODE_API_KEY", "dummy-key")
     os.environ.setdefault("DISABLE_CODE_API_AUTH", "true")
-    import main
     from main import KernelManager
 
 from fastapi import HTTPException

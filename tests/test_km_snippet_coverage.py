@@ -1,8 +1,6 @@
 import pytest
 import asyncio
 import time
-import os
-import shutil
 from unittest.mock import MagicMock, patch, ANY
 import docker
 from main import KernelManager

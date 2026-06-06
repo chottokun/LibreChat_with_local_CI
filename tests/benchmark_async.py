@@ -1,7 +1,6 @@
 import asyncio
 import time
 import pytest
-from fastapi.testclient import TestClient
 from main import app, kernel_manager
 from unittest.mock import MagicMock
 import httpx
