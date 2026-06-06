@@ -789,35 +789,29 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
     current_files = await asyncio.to_thread(kernel_manager.list_files, real_session_id, external_session_id=nanoid_session)
     structured_files = []
     
-    # Initialize file mapping for this session
+    # Initialize and populate file mapping for this session
     with kernel_manager.lock:
         if nanoid_session not in kernel_manager.file_id_map:
             kernel_manager.file_id_map[nanoid_session] = {}
         # Pre-calculate reverse mapping once to avoid O(N^2) inside the loop
         existing_filenames_to_ids = {v: k for k, v in kernel_manager.file_id_map[nanoid_session].items()}
-    
-    for f in current_files:
-        mime_type, _ = mimetypes.guess_type(f)
-        # Generate or reuse nanoid for this file
-        if f in existing_filenames_to_ids:
-            nanoid_file = existing_filenames_to_ids[f]
-        else:
-            with kernel_manager.lock:
-                # Double-check inside lock to prevent duplicates
-                current_rev_map = {v: k for k, v in kernel_manager.file_id_map[nanoid_session].items()}
-                if f in current_rev_map:
-                    nanoid_file = current_rev_map[f]
-                else:
-                    nanoid_file = generate_nanoid()
-                    kernel_manager.file_id_map[nanoid_session][nanoid_file] = f
+
+        for f in current_files:
+            mime_type, _ = mimetypes.guess_type(f)
+            # Generate or reuse nanoid for this file
+            if f in existing_filenames_to_ids:
+                nanoid_file = existing_filenames_to_ids[f]
+            else:
+                nanoid_file = generate_nanoid()
+                kernel_manager.file_id_map[nanoid_session][nanoid_file] = f
                 existing_filenames_to_ids[f] = nanoid_file
 
-        structured_files.append({
-            "id": nanoid_file,
-            "name": f,
-            "url": f"/api/files/code/download/{nanoid_session}/{nanoid_file}",
-            "type": mime_type or "application/octet-stream"
-        })
+            structured_files.append({
+                "id": nanoid_file,
+                "name": f,
+                "url": f"/api/files/code/download/{nanoid_session}/{nanoid_file}",
+                "type": mime_type or "application/octet-stream"
+            })
     
     return {
         "stdout": result["stdout"],
