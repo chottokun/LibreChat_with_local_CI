@@ -38,6 +38,7 @@ def test_path_traversal_blocked_download():
         mock_km.file_id_map = {}
         mock_km.download_file.return_value = (b"content", 123456789)
         mock_km.resolve_session_id.side_effect = lambda x: x
+        mock_km.resolve_download_ids.return_value = ("etc", "test.txt")
 
         client = TestClient(main.app)
 

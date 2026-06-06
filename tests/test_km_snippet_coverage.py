@@ -70,14 +70,10 @@ async def test_cleanup_loop_explicit_error_handler(km):
 
     with patch("main.asyncio.to_thread", side_effect=Exception("Thread failure")):
         with patch("main.logger") as mock_logger:
-            # Mock sleep to return immediately to process loop without long delay
-            with patch("asyncio.sleep", return_value=None):
-                task = asyncio.create_task(km.cleanup_loop())
-                # Give control to the event loop so the task runs at least once
-                await asyncio.sleep(0.001)
-                task.cancel()
+            # Patch main.asyncio.sleep only to avoid global flakiness
+            with patch("main.asyncio.sleep", side_effect=asyncio.CancelledError):
                 try:
-                    await task
+                    await km.cleanup_loop()
                 except asyncio.CancelledError:
                     pass
 
