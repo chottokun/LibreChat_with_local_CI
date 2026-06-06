@@ -55,20 +55,21 @@ def test_cors_headers_present():
     通常リクエストで正常に返されること、かつセキュリティヘッダーと両立することを検証します。
     """
     # A. プレフライト OPTIONS リクエストの検証
+    # NOTE: CORS_ALLOWED_ORIGINS デフォルト値 (localhost:3000/3080) を想定
     response = client.options(
         "/health",
         headers={
-            "Origin": "http://example.com",
+            "Origin": "http://localhost:3000",
             "Access-Control-Request-Method": "GET",
         }
     )
     assert response.status_code == 200
-    assert response.headers.get("access-control-allow-origin") == "http://example.com"
+    assert response.headers.get("access-control-allow-origin") == "http://localhost:3000"
 
     # B. 実際の CORS リクエストの検証
-    response = client.get("/health", headers={"Origin": "http://example.com"})
+    response = client.get("/health", headers={"Origin": "http://localhost:3000"})
     assert response.status_code == 200
-    assert response.headers.get("access-control-allow-origin") == "http://example.com"
+    assert response.headers.get("access-control-allow-origin") == "http://localhost:3000"
     # セキュリティヘッダーも同時に付与されているか確認
     for header, value in SECURITY_HEADERS.items():
         assert response.headers.get(header) == value

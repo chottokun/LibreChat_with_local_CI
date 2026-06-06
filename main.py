@@ -75,6 +75,10 @@ RCE_SESSION_TTL = int(os.environ.get("RCE_SESSION_TTL", "3600"))
 RCE_MAX_SESSIONS = int(os.environ.get("RCE_MAX_SESSIONS", "100"))
 RCE_MANAGED_BY_VALUE = "librechat-rce"
 
+# CORS configuration
+CORS_ALLOWED_ORIGINS_RAW = os.environ.get("CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:3080")
+CORS_ALLOWED_ORIGINS = [origin.strip() for origin in CORS_ALLOWED_ORIGINS_RAW.split(",") if origin.strip()]
+
 # 1. 認証スキームの設定
 # クエリパラメータによるAPIキーフォールバックを許可するため、auto_error=False に設定
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -233,7 +237,7 @@ class SecurityHeadersCORSMiddleware(CORSMiddleware):
 
 app.add_middleware(
     SecurityHeadersCORSMiddleware,
-    allow_origin_regex="https?://.*",
+    allow_origins=CORS_ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
