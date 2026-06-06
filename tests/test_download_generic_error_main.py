@@ -1,27 +1,28 @@
-import pytest
 from unittest.mock import patch
 from fastapi.testclient import TestClient
+import os
 import main
 from main import app, API_KEY
 
-client = TestClient(app)
-
 @patch("main.RCE_DATA_DIR_HOST", "some/host/path")
-@patch("os.path.exists")
-def test_download_session_file_generic_exception_volume_mode(mock_exists, caplog):
+def test_download_session_file_generic_exception_volume_mode(caplog):
     """
     Test that an unexpected exception during file existence check (volume mode)
     is caught, logged, and returns a 500 error.
     Targets main.py:977-979
     """
-    # Force os.path.exists to raise an exception
-    mock_exists.side_effect = Exception("Disk error")
+    original_exists = os.path.exists
+    def conditional_exists(path):
+        if "test_file.txt" in str(path):
+            raise Exception("Disk error")
+        return original_exists(path)
 
-    local_client = TestClient(app, raise_server_exceptions=False)
-    response = local_client.get(
-        "/download/test_session/test_file.txt",
-        headers={"X-API-Key": API_KEY}
-    )
+    with patch("os.path.exists", side_effect=conditional_exists):
+        local_client = TestClient(app, raise_server_exceptions=False)
+        response = local_client.get(
+            "/download/test_session/test_file.txt",
+            headers={"X-API-Key": API_KEY}
+        )
 
     assert response.status_code == 500
     assert response.json()["detail"] == "Internal server error during file download"
