@@ -64,9 +64,10 @@ async def test_upload_file_read_exception(caplog):
     """
     from main import upload_files
 
+    from unittest.mock import AsyncMock
     mock_file = MagicMock(spec=UploadFile)
     mock_file.filename = "corrupt.txt"
-    mock_file.read.side_effect = Exception("Read error")
+    mock_file.read = AsyncMock(side_effect=Exception("Read error"))
 
     with caplog.at_level(logging.ERROR):
         with pytest.raises(HTTPException) as excinfo:
