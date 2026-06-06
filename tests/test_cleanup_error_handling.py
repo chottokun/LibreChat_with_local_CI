@@ -78,3 +78,52 @@ def test_cleanup_sessions_continues_after_error(km):
 
         # Error for s1 should be logged
         mock_logger.error.assert_any_call("Error cleaning up session %s: %s", s1, c1.stop.side_effect)
+
+def test_cleanup_sessions_directory_exists_error(km):
+    """Test that cleanup_sessions handles errors when checking if directory exists."""
+    session_id = "test_session_dir_error"
+
+    # Setup session to be cleaned up
+    km.active_kernels[session_id] = {
+        "container": MagicMock(),
+        "last_accessed": time.time() - (main.RCE_SESSION_TTL + 100)
+    }
+
+    with patch("main.RCE_DATA_DIR_INTERNAL", "/tmp/sessions"), \
+         patch("os.path.exists", side_effect=Exception("Disk error")), \
+         patch("main.logger") as mock_logger:
+
+        km.cleanup_sessions()
+
+        # Verify logger.error was called
+        # The exception object itself is passed to logger.error
+        args, _ = mock_logger.error.call_args
+        assert args[0] == "Error cleaning up session %s: %s"
+        assert args[1] == session_id
+        assert str(args[2]) == "Disk error"
+
+        # The session should still be removed from active_kernels
+        assert session_id not in km.active_kernels
+
+def test_cleanup_sessions_missing_data_error(km):
+    """Test that cleanup_sessions handles errors even if data (container) is missing."""
+    session_id = "test_session_missing_data"
+
+    # Mock active_kernels to simulate a session being in to_delete but missing during pop
+    km.active_kernels = MagicMock()
+    # first call to items() returns the session_id to populate to_delete
+    km.active_kernels.items.return_value = [(session_id, {"last_accessed": 0})]
+    # pop returns None to simulate missing data
+    km.active_kernels.pop.return_value = None
+
+    with patch("main.RCE_DATA_DIR_INTERNAL", "/tmp/sessions"), \
+         patch("shutil.rmtree", side_effect=Exception("rmtree failed")), \
+         patch("os.path.exists", return_value=True), \
+         patch("main.logger") as mock_logger:
+
+        km.cleanup_sessions()
+
+        args, _ = mock_logger.error.call_args
+        assert args[0] == "Error cleaning up session %s: %s"
+        assert args[1] == session_id
+        assert str(args[2]) == "rmtree failed"
