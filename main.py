@@ -1,4 +1,5 @@
 import io
+import weakref
 import tarfile
 import logging
 import os
@@ -264,10 +265,21 @@ class KernelManager:
     def __init__(self):
         self.active_kernels = {} # Maps session_id to dict with container and last_accessed
         self.lock = threading.Lock()
+        self.session_locks = weakref.WeakValueDictionary()
+        self.session_locks_lock = threading.Lock()
         # Mapping: nanoid_session_id -> uuid_session_id and nanoid_file_id -> filename
         self.nanoid_to_session: Dict[str, str] = {}
         self.session_to_nanoid: Dict[str, str] = {}
         self.file_id_map: Dict[str, Dict[str, str]] = {}  # {nanoid_session_id: {nanoid_file_id: filename}}
+
+    def _get_session_lock(self, session_id: str) -> threading.RLock:
+        """Gets or creates a session-specific lock."""
+        with self.session_locks_lock:
+            lock = self.session_locks.get(session_id)
+            if lock is None:
+                lock = threading.RLock()
+                self.session_locks[session_id] = lock
+            return lock
 
     def resolve_session_id(self, session_id: str) -> str:
         """Resolves a potential nanoid session ID to the real internal session ID."""
@@ -319,40 +331,108 @@ class KernelManager:
             return real_session_id, os.path.basename(real_filename)
 
     def get_or_create_container(self, session_id: str, force_refresh: bool = False, external_session_id: Optional[str] = None):
+        # Fast path: check if session exists and is not being refreshed
         with self.lock:
             if not force_refresh and session_id in self.active_kernels:
                 self.active_kernels[session_id]["last_accessed"] = time.time()
                 return self.active_kernels[session_id]["container"]
 
-            if session_id in self.active_kernels:
-                try:
-                    # Re-fetch or refresh container status
-                    container = self.active_kernels[session_id]["container"]
-                    # If we have an object, we can try to reload it to get fresh status
-                    try:
-                        container.reload()
-                    except docker.errors.NotFound:
-                        # If reload fails, it's gone
-                        del self.active_kernels[session_id]
-                        return self.start_new_container_unlocked(session_id, external_session_id)
+        # Slow path: use session-specific lock to avoid blocking other sessions
+        session_lock = self._get_session_lock(session_id)
+        with session_lock:
+            container_to_refresh = None
+            with self.lock:
+                # Re-check under lock in case it was created/refreshed while waiting for session_lock
+                if not force_refresh and session_id in self.active_kernels:
+                    self.active_kernels[session_id]["last_accessed"] = time.time()
+                    return self.active_kernels[session_id]["container"]
 
-                    if container.status == "running":
-                        self.active_kernels[session_id]["last_accessed"] = time.time()
-                        return container
+                if session_id in self.active_kernels:
+                    container_to_refresh = self.active_kernels[session_id]["container"]
+
+            if container_to_refresh:
+                try:
+                    # Slow Docker API call outside global lock
+                    container_to_refresh.reload()
+                    if container_to_refresh.status == "running":
+                        with self.lock:
+                            if session_id in self.active_kernels:
+                                self.active_kernels[session_id]["last_accessed"] = time.time()
+                        return container_to_refresh
                     else:
-                        # Restart if stopped
-                        container.start()
-                        self.active_kernels[session_id]["last_accessed"] = time.time()
-                        return container
+                        # Slow Docker API call outside global lock
+                        container_to_refresh.start()
+                        with self.lock:
+                            if session_id in self.active_kernels:
+                                self.active_kernels[session_id]["last_accessed"] = time.time()
+                        return container_to_refresh
+                except docker.errors.NotFound:
+                    with self.lock:
+                        self.active_kernels.pop(session_id, None)
+                    # Fall through to create new
                 except Exception:
-                    # Any other error, try to start fresh
-                    del self.active_kernels[session_id]
+                    logger.exception("Error refreshing container for session %s", session_id)
+                    with self.lock:
+                        self.active_kernels.pop(session_id, None)
+                    # Fall through to create new
 
             return self.start_new_container_unlocked(session_id, external_session_id)
 
     def start_new_container(self, session_id: str, external_session_id: Optional[str] = None):
-        with self.lock:
-            return self.start_new_container_unlocked(session_id, external_session_id)
+        session_lock = self._get_session_lock(session_id)
+        with session_lock:
+            # Double check existence and capacity under global lock
+            with self.lock:
+                if session_id in self.active_kernels:
+                    return self.active_kernels[session_id]["container"]
+
+                if len(self.active_kernels) >= RCE_MAX_SESSIONS:
+                    logger.warning("Max sessions reached: %d", RCE_MAX_SESSIONS)
+                    raise HTTPException(status_code=503, detail="Server is at capacity. Please try again later.")
+
+            # Slow Docker operations outside global lock
+            container = None
+            try:
+                config = self._get_container_config()
+                volumes = self._prepare_volumes(session_id)
+
+                container = DOCKER_CLIENT.containers.run(
+                    image=RCE_IMAGE_NAME,
+                    command="tail -f /dev/null", # Keep alive
+                    detach=True,
+                    remove=True, # Remove when stopped
+                    name=f"rce_{session_id}_{uuid.uuid4().hex[:6]}",
+                    working_dir="/mnt/data",
+                    labels={
+                        "managed_by": RCE_MANAGED_BY_VALUE,
+                        "session_id": session_id,
+                        "external_session_id": external_session_id or ""
+                    },
+                    environment={"PYTHONUNBUFFERED": "1"},
+                    volumes=volumes,
+                    **config
+                )
+                # Ensure workspace exists
+                container.exec_run(cmd=["mkdir", "-p", "/mnt/data"])
+
+                with self.lock:
+                    self.active_kernels[session_id] = {
+                        "container": container,
+                        "last_accessed": time.time()
+                    }
+                return container
+            except Exception:
+                logger.exception("Failed to start sandbox for session %s", session_id)
+                if container:
+                    try:
+                        container.stop(timeout=2)
+                    except Exception as stop_err:
+                        logger.error("Failed to stop container %s after startup failure: %s", container.id if hasattr(container, "id") else "unknown", stop_err)
+                raise HTTPException(status_code=500, detail="Failed to start sandbox. Please contact an administrator.")
+
+    def start_new_container_unlocked(self, session_id: str, external_session_id: Optional[str] = None):
+        """Deprecated: Use start_new_container instead. Maintained for test compatibility."""
+        return self.start_new_container(session_id, external_session_id)
 
     def _get_container_config(self) -> Dict[str, Any]:
         """Parses resource limits and configuration from environment variables."""
@@ -386,48 +466,6 @@ class KernelManager:
 
         return {session_dir_host: {'bind': '/mnt/data', 'mode': 'rw'}}
 
-    def start_new_container_unlocked(self, session_id: str, external_session_id: Optional[str] = None):
-        # Enforce max sessions
-        if len(self.active_kernels) >= RCE_MAX_SESSIONS:
-            logger.warning("Max sessions reached: %d", RCE_MAX_SESSIONS)
-            raise HTTPException(status_code=503, detail="Server is at capacity. Please try again later.")
-
-        container = None
-        try:
-            config = self._get_container_config()
-            volumes = self._prepare_volumes(session_id)
-
-            container = DOCKER_CLIENT.containers.run(
-                image=RCE_IMAGE_NAME,
-                command="tail -f /dev/null", # Keep alive
-                detach=True,
-                remove=True, # Remove when stopped
-                name=f"rce_{session_id}_{uuid.uuid4().hex[:6]}",
-                working_dir="/mnt/data",
-                labels={
-                    "managed_by": RCE_MANAGED_BY_VALUE,
-                    "session_id": session_id,
-                    "external_session_id": external_session_id or ""
-                },
-                environment={"PYTHONUNBUFFERED": "1"},
-                volumes=volumes,
-                **config
-            )
-            # Ensure workspace exists
-            container.exec_run(cmd=["mkdir", "-p", "/mnt/data"])
-            self.active_kernels[session_id] = {
-                "container": container,
-                "last_accessed": time.time()
-            }
-            return container
-        except Exception:
-            logger.exception("Failed to start sandbox for session %s", session_id)
-            if container:
-                try:
-                    container.stop(timeout=2)
-                except Exception as stop_err:
-                    logger.error("Failed to stop container %s after startup failure: %s", container.id if hasattr(container, "id") else "unknown", stop_err)
-            raise HTTPException(status_code=500, detail="Failed to start sandbox. Please contact an administrator.")
 
     def recover_containers(self):
         """Scans Docker for existing containers managed by this API and re-adopts them."""
