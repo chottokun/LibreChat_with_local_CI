@@ -753,7 +753,6 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
         real_session_id, nanoid_session = kernel_manager.get_or_create_session_mapping(sid)
     
     # Run in sandbox
-    # Run in sandbox
     result = kernel_manager.execute_code(real_session_id, req.code, lang=(req.lang or "python").lower(), external_session_id=nanoid_session)
     
     # List generated files and format them for LibreChat native ingestion

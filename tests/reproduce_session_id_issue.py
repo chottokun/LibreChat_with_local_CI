@@ -62,7 +62,6 @@ def test_session_id_mapping_consistency(mock_docker):
         headers=headers
     )
     assert response_exec.status_code == 200
-    # FIX: it should now respect test_sid_exec!
     returned_sid = response_exec.json()["session_id"]
 
     print(f"Provided SID for /exec: {test_sid_exec}")
