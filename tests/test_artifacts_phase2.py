@@ -49,8 +49,10 @@ def test_docker_compose_caddy_service():
     
     # ports の確認
     ports = caddy_service.get("ports", [])
-    assert "443:443" in ports, "caddy サービスのポートに '443:443' が設定されていません。"
-    assert "8443:8443" in ports, "caddy サービスのポートに '8443:8443' が設定されていません。"
+    # Environment variable interpolation support (default values 443 and 8443)
+    # We check for the specific mappings with optional env var syntax
+    assert any(p == "443:443" or p == "${CADDY_HTTPS_PORT:-443}:443" for p in ports), "caddy サービスのポートに '443:443' (または変形式) が設定されていません。"
+    assert any(p == "8443:8443" or p == "${CADDY_SANDPACK_PORT:-8443}:8443" for p in ports), "caddy サービスのポートに '8443:8443' (または変形式) が設定されていません。"
     
     # volumes の確認
     volumes = caddy_service.get("volumes", [])
