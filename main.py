@@ -299,6 +299,19 @@ class KernelManager:
             nanoid_session = self.session_to_nanoid.get(real_session_id, s_sid)
             return real_session_id, nanoid_session
 
+    def resolve_download_ids(self, session_id: str, filename: str) -> Tuple[str, str]:
+        """Resolves potential nanoid IDs for session and file to their real values."""
+        s_session_id = sanitize_id(session_id)
+        s_filename = os.path.basename(filename)
+
+        with self.lock:
+            real_session_id = self.nanoid_to_session.get(s_session_id, s_session_id)
+            real_filename = s_filename
+            if s_session_id in self.file_id_map and s_filename in self.file_id_map[s_session_id]:
+                real_filename = self.file_id_map[s_session_id][s_filename]
+
+            return real_session_id, os.path.basename(real_filename)
+
     def get_or_create_container(self, session_id: str, force_refresh: bool = False, external_session_id: Optional[str] = None):
         with self.lock:
             if not force_refresh and session_id in self.active_kernels:
@@ -917,6 +930,29 @@ async def list_session_files(session_id: str, key: str = Security(get_api_key)):
             
     return file_list
 
+def get_download_meta(real_filename: str) -> Tuple[str, Dict[str, str]]:
+    """Determines MIME type and constructs headers for file download."""
+    # Guess MIME type
+    if real_filename.lower().endswith(".csv"):
+        mime_type = "text/plain"  # Force text/plain to allow inline display and bypass Chrome's HTTP download security block
+    else:
+        mime_type, _ = mimetypes.guess_type(real_filename)
+        if not mime_type:
+            mime_type = "application/octet-stream"
+
+    # Use inline for images, PDFs, and text files (including CSV rendered as text/plain) to bypass Chrome's insecure download blocker
+    disposition = "inline" if mime_type.startswith(("image/", "application/pdf", "text/")) else "attachment"
+
+    # Manually construct Content-Disposition header to ensure maximum compatibility with Japanese filenames.
+    # Starlette's default FileResponse might not always provide the filename="..." fallback correctly for non-ASCII.
+    filename_encoded = quote(real_filename)
+    # Fallback to an ASCII-safe filename or 'file' if no ASCII characters exist.
+    safe_filename_ascii = real_filename.encode('ascii', 'ignore').decode().replace('"', '').replace('\r', '').replace('\n', '') or "file"
+    headers = {
+        "Content-Disposition": f"{disposition}; filename=\"{safe_filename_ascii}\"; filename*=utf-8''{filename_encoded}"
+    }
+    return mime_type, headers
+
 @app.get("/download")
 @app.get("/run/download")
 async def download_file_query(
@@ -944,21 +980,7 @@ async def download_session_file(
     Supports nanoid-format IDs (used by LibreChat) and direct session_id/filename.
     Uses FileResponse to ensure perfect streaming header compatibility with LibreChat's Axios proxy.
     """
-    # Sanitize inputs
-    s_session_id = sanitize_id(session_id)
-    s_filename = os.path.basename(filename) # filename can contain dots, but not path segments
-
-    # Resolve nanoid session ID to real UUID session ID
-    with kernel_manager.lock:
-        real_session_id = kernel_manager.nanoid_to_session.get(s_session_id, s_session_id)
-
-        # Resolve nanoid file ID to real filename
-        real_filename = s_filename
-        if s_session_id in kernel_manager.file_id_map and s_filename in kernel_manager.file_id_map[s_session_id]:
-            real_filename = kernel_manager.file_id_map[s_session_id][s_filename]
-        
-        # Double check: ensure real_filename is just a basename
-        real_filename = os.path.basename(real_filename)
+    real_session_id, real_filename = kernel_manager.resolve_download_ids(session_id, filename)
     
     # Determine the file path if volume mounting is enabled
     in_memory_content = None
@@ -978,25 +1000,7 @@ async def download_session_file(
         logger.error("Failed to download file %s from session %s: %s", filename, session_id, e)
         raise HTTPException(status_code=500, detail="Internal server error during file download")
 
-    # Guess MIME type
-    if real_filename.lower().endswith(".csv"):
-        mime_type = "text/plain"  # Force text/plain to allow inline display and bypass Chrome's HTTP download security block
-    else:
-        mime_type, _ = mimetypes.guess_type(real_filename)
-        if not mime_type:
-            mime_type = "application/octet-stream"
-
-    # Use inline for images, PDFs, and text files (including CSV rendered as text/plain) to bypass Chrome's insecure download blocker
-    disposition = "inline" if mime_type.startswith(("image/", "application/pdf", "text/")) else "attachment"
-
-    # Manually construct Content-Disposition header to ensure maximum compatibility with Japanese filenames.
-    # Starlette's default FileResponse might not always provide the filename="..." fallback correctly for non-ASCII.
-    filename_encoded = quote(real_filename)
-    # Fallback to an ASCII-safe filename or 'file' if no ASCII characters exist.
-    safe_filename_ascii = real_filename.encode('ascii', 'ignore').decode().replace('"', '').replace('\r', '').replace('\n', '') or "file"
-    headers = {
-        "Content-Disposition": f"{disposition}; filename=\"{safe_filename_ascii}\"; filename*=utf-8''{filename_encoded}"
-    }
+    mime_type, headers = get_download_meta(real_filename)
 
     if in_memory_content is not None:
         return Response(
