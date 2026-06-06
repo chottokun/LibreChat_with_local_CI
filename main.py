@@ -815,7 +815,7 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
         structured_files.append({
             "id": nanoid_file,
             "name": f,
-            "url": f"/api/files/code/download/{nanoid_session}/{nanoid_file}",
+            "url": f"/api/files/code/download/{sid}/{nanoid_file}",
             "type": mime_type or "application/octet-stream"
         })
     
@@ -826,7 +826,7 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
         "output": result["stdout"],
         "result": result["stdout"],
         "status": "success" if result["exit_code"] == 0 else "error",
-        "session_id": nanoid_session,
+        "session_id": sid,
         "files": structured_files,
         "images": [] # Placeholder for future image capture implementation
     }
@@ -882,9 +882,9 @@ async def upload_files(
 
         # 直近でアップロードに成功したセッション情報をグローバルに記録
         global LAST_UPLOADED_SESSION_ID, LAST_UPLOAD_TIME
-        LAST_UPLOADED_SESSION_ID = nanoid_session
+        LAST_UPLOADED_SESSION_ID = sid
         LAST_UPLOAD_TIME = time.time()
-        logger.info("Recorded last uploaded session ID: %s", nanoid_session)
+        logger.info("Recorded last uploaded session ID: %s", sid)
 
         uploaded_files = []
         with kernel_manager.lock:
@@ -906,7 +906,7 @@ async def upload_files(
         # Standardize response structure
         res = {
             "message": "success",
-            "session_id": nanoid_session,
+            "session_id": sid,
             "files": uploaded_files
         }
         # Flatten the first file for root-level access (LibreChat compatibility)
