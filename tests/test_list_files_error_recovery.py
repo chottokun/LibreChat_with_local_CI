@@ -1,16 +1,20 @@
 import pytest
+import os
 from unittest.mock import MagicMock, patch
-from main import KernelManager
-import main
+
+# Mock docker.from_env and set env vars before importing main to prevent side effects
+with patch("docker.from_env") as mock_from_env:
+    os.environ.setdefault("LIBRECHAT_CODE_API_KEY", "dummy-key")
+    os.environ.setdefault("DISABLE_CODE_API_AUTH", "true")
+    import main
+    from main import KernelManager
 
 @pytest.fixture(autouse=True)
 def mock_docker_client():
     """Replace main.DOCKER_CLIENT with a MagicMock for each test."""
     mock_client = MagicMock()
-    original = main.DOCKER_CLIENT
-    main.DOCKER_CLIENT = mock_client
-    yield mock_client
-    main.DOCKER_CLIENT = original
+    with patch("main.DOCKER_CLIENT", mock_client):
+        yield mock_client
 
 @pytest.fixture
 def kernel_manager():
