@@ -305,10 +305,16 @@ class KernelManager:
         s_filename = os.path.basename(filename)
 
         with self.lock:
-            real_session_id = self.nanoid_to_session.get(s_session_id, s_session_id)
+            if s_session_id in self.nanoid_to_session:
+                real_session_id = self.nanoid_to_session[s_session_id]
+                nanoid_session = s_session_id
+            else:
+                real_session_id = s_session_id
+                nanoid_session = self.session_to_nanoid.get(s_session_id, s_session_id)
+
             real_filename = s_filename
-            if s_session_id in self.file_id_map and s_filename in self.file_id_map[s_session_id]:
-                real_filename = self.file_id_map[s_session_id][s_filename]
+            if nanoid_session in self.file_id_map and s_filename in self.file_id_map[nanoid_session]:
+                real_filename = self.file_id_map[nanoid_session][s_filename]
 
             return real_session_id, os.path.basename(real_filename)
 
@@ -952,7 +958,7 @@ def get_download_meta(real_filename: str) -> Tuple[str, Dict[str, str]]:
     # Starlette's default FileResponse might not always provide the filename="..." fallback correctly for non-ASCII.
     filename_encoded = quote(real_filename)
     # Fallback to an ASCII-safe filename or 'file' if no ASCII characters exist.
-    safe_filename_ascii = real_filename.encode('ascii', 'ignore').decode().replace('"', '').replace('\r', '').replace('\n', '') or "file"
+    safe_filename_ascii = real_filename.encode('ascii', 'ignore').decode().replace('\\', '').replace('"', '').replace('\r', '').replace('\n', '') or "file"
     headers = {
         "Content-Disposition": f"{disposition}; filename=\"{safe_filename_ascii}\"; filename*=utf-8''{filename_encoded}"
     }
