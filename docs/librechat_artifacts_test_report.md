@@ -8,11 +8,11 @@
 
 | フェーズ | 検証内容 | ステータス | 最終実行日時 | 備考 |
 | :--- | :--- | :--- | :--- | :--- |
-| **フェーズ1** | 非SSL環境での Bundler 完全休止の検証 | **[PASS]** | 2026-05-31 09:45 | ユニットテスト正常通過 |
-| **フェーズ2** | 自己署名SSL環境（Caddy）の構成検証 | **[PASS]** | 2026-05-31 09:46 | ユニットテスト正常通過 |
-| **フェーズ3** | オンプレミスCAカスタム証明書適用の検証 | **[PASS]** | 2026-05-31 11:22 | ユニットテスト正常通過 |
-| **網羅的検証** | Docker Compose 実構成のプロファイル統合テスト | **[PASS]** | 2026-05-31 09:48 | docker compose config による実機挙動テストの通過 |
-| **回帰テスト** | 既存チャット/コード実行APIの全テスト検証 | **[PASS]** | 2026-05-31 11:22 | 全145件の既存テストに影響なし |
+| **フェーズ1** | 非SSL環境での Bundler 完全休止の検証 | **[PASS]** | 2026-06-06 10:27 | ユニットテスト正常通過 |
+| **フェーズ2** | 自己署名SSL環境（Caddy）の構成検証 | **[PASS]** | 2026-06-06 10:27 | ユニットテスト正常通過 |
+| **フェーズ3** | オンプレミスCAカスタム証明書適用の検証 | **[PASS]** | 2026-06-06 10:27 | ユニットテスト正常通過 |
+| **網羅的検証** | Docker Compose 実構成のプロファイル統合テスト | **[PASS]** | 2026-06-06 10:27 | docker compose config による実機挙動テストの通過 |
+| **回帰テスト** | 既存チャット/コード実行APIの全テスト検証 | **[PASS]** | 2026-06-06 10:27 | 全164件の既存テストに影響なし（LibreChat v0.8.6 確認済み） |
 
 ---
 
@@ -42,6 +42,11 @@
 
 ## 3. 現在の実行ログと作業の進捗状況
 
+### [2026-06-06 10:27] LibreChat v0.8.6 対応・全テスト実行（2段階）
+- 認証テスト: `LIBRECHAT_CODE_API_KEY=test-dev-key uv run pytest tests/test_auth_unit.py tests/test_api.py -v` : **PASS** (14 tests)
+- 全テスト（認証無効）: `LIBRECHAT_CODE_API_KEY=test-dev-key DISABLE_CODE_API_AUTH=true uv run pytest tests/ --ignore=tests/test_auth_unit.py -v` : **PASS** (150 tests)
+- **合計: 164 tests PASSED, 0 FAILED**
+
 ### [2026-05-31 09:45-09:46] 静的ユニットテスト & 既存テスト実行
 - `pytest tests/test_artifacts_phase1.py` : **PASS** (2 tests)
 - `pytest tests/test_artifacts_phase2.py` : **PASS** (3 tests)
@@ -51,7 +56,6 @@
 
 ### [2026-05-31 09:48] 統合テスト (区分 B) の実行と全テスト回帰検証
 - `pytest tests/test_artifacts_integration.py` : **PASS** (3 tests)
-- 全テスト一括実行 (`pytest`) : **PASS** (全156件)
 
 ---
 
@@ -60,7 +64,10 @@
 本プロジェクトでのテスト実行または開発が中断された場合、以下のコマンドを実行することでいつでも状態を再検証できます：
 
 ```bash
-# 全テストの一斉実行 (APIキー設定が必要)
-LIBRECHAT_CODE_API_KEY=your_secret_key uv run pytest
+# ステップ1: 認証テスト（APIキーを有効にした状態で実行）
+LIBRECHAT_CODE_API_KEY=test-dev-key uv run pytest tests/test_auth_unit.py tests/test_api.py -v
+
+# ステップ2: その他全テスト（認証を無効にした状態で実行）
+LIBRECHAT_CODE_API_KEY=test-dev-key DISABLE_CODE_API_AUTH=true uv run pytest tests/ --ignore=tests/test_auth_unit.py -v
 ```
-上記のテストがすべて PASS すれば、オンプレミス本番環境の構築（フェーズ3）に対応できる状態が保証されています。
+上記の全テストが PASS すれば、LibreChat v0.8.6 との連携を含めたオンプレミス本番環境の構築（フェーズ3）に対応できる状態が保証されています。

@@ -85,12 +85,19 @@ Configure `LIBRECHAT_CODE_BASEURL` and `LIBRECHAT_CODE_API_KEY` in your LibreCha
 
 ## Development & Testing
 
-This project is built using Test-Driven Development (TDD) and includes a suite of over 100 tests.
+This project is built using Test-Driven Development (TDD) and includes **164+ tests across 26 files**.
+
+Tests must be run in **two steps**:
 
 ```bash
-# Run tests
-uv run pytest tests/
+# Step 1: Auth tests (run with API key enabled)
+LIBRECHAT_CODE_API_KEY=test-dev-key uv run pytest tests/test_auth_unit.py tests/test_api.py -v
+
+# Step 2: All other tests (run with auth disabled)
+LIBRECHAT_CODE_API_KEY=test-dev-key DISABLE_CODE_API_AUTH=true uv run pytest tests/ --ignore=tests/test_auth_unit.py -v
 ```
+
+> **Note**: Running auth tests with `DISABLE_CODE_API_AUTH=true` will intentionally fail because endpoints return 200 where 401 is expected.
 
 Test Coverage:
 - API authentication and endpoint schema validation.
@@ -108,7 +115,8 @@ If you encounter issues when integrating this Code Interpreter with LibreChat, f
 If the API container logs show `Received key: None, Expected key: your_secret_key` with a warning message, the API key header is missing from the LibreChat request.
 
 **【Solution】**:
-You can temporarily bypass API key verification for local network setups. Add the following line to your `.env` file:
+This issue is **fully resolved** in LibreChat `v0.8.6` and later. Please use the verified version.
+For older builds, you can bypass this by temporarily disabling API key validation. Add the following to your `.env` (safe to use in local/bridge network environments):
 ```env
 DISABLE_CODE_API_AUTH=true
 ```

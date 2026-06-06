@@ -30,7 +30,7 @@ APIサーバーの認証および動作制御は、以下の環境変数で行�
 | 環境変数名 | 推奨値 / 例 | 説明 |
 |---|---|---|
 | `LIBRECHAT_CODE_API_KEY` | `your_secure_secret_key` | APIアクセス認証用の共有キー（必須）。LibreChat側のキーと一致させる必要があります。 |
-| `DISABLE_CODE_API_AUTH` | `false` | `true` に設定するとAPIキーの検証をスキップします。かつてLibreChatの特定バージョンでAPIキーがヘッダーから欠落し `401 Unauthorized` になるバグを回避する際に使用されました（最新のv0.8.4-rc1以降ではバグが修正されているため、通常は `false` で安全に運用可能です）。 |
+| `DISABLE_CODE_API_AUTH` | `false` | `true` に設定するとAPIキーの検証をスキップします。LibreChat `v0.8.6` 以降では認証が正常に動作するため通常は `false` で運用してください。旧バージョンとの互換性維持や開発・テスト時にのみ使用します。 |
 | `RCE_DATA_DIR` | `/home/user/project/sessions` | ホスト側のセッションファイル保存先（絶対パス）。これを指定すると「ボリュームマウントモード」で動作し、高速なファイル転送が実現します。 |
 
 ---
