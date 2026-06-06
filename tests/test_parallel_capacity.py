@@ -1,4 +1,3 @@
-import pytest
 import threading
 import time
 import os
@@ -7,7 +6,7 @@ from fastapi import HTTPException
 
 # Set API KEY before importing main to avoid validation error
 os.environ["LIBRECHAT_CODE_API_KEY"] = "test-key"
-from main import KernelManager
+from main import KernelManager  # noqa: E402
 
 def test_parallel_container_creation_respects_max_sessions():
     """
@@ -20,7 +19,6 @@ def test_parallel_container_creation_respects_max_sessions():
     km.pending_sessions = set()
     
     # Set capacity limit to 2
-    from main import RCE_MAX_SESSIONS
     with patch("main.RCE_MAX_SESSIONS", 2):
         # We mock DOCKER_CLIENT.containers.run to simulate a slow Docker startup (0.1s delay)
         mock_docker_client = MagicMock()

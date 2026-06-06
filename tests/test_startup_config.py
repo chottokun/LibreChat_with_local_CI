@@ -2,11 +2,11 @@ import os
 import importlib
 import pytest
 import logging
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 # Set API KEY before importing main to avoid collection error
 os.environ["LIBRECHAT_CODE_API_KEY"] = "dummy-key-for-collection"
-import main
+import main  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def reset_env():

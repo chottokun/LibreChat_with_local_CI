@@ -15,7 +15,7 @@ mimetypes.add_type("application/zip", ".zip")
 
 # Set environment variable before importing main
 os.environ["LIBRECHAT_CODE_API_KEY"] = "test_key"
-from main import get_download_meta
+from main import get_download_meta  # noqa: E402
 
 @pytest.mark.parametrize("filename, expected_mime, expected_disposition", [
     ("test.csv", "text/plain", "inline"),
