@@ -567,7 +567,9 @@ def test_recover_containers_id_access_failure_double_fault_extended(kernel_manag
     # Setup
     mock_container = MagicMock()
     # container.id access will fail
-    type(mock_container).id = property(lambda x: exec('raise Exception("ID access failed")'))
+    def failing_id(self):
+        raise Exception("ID access failed")
+    type(mock_container).id = property(failing_id)
     mock_container.labels = {"session_id": "sid_test"}
 
     main.DOCKER_CLIENT.containers.list.return_value = [mock_container]
