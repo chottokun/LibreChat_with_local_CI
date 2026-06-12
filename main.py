@@ -1,3 +1,4 @@
+from __future__ import annotations
 import io
 import weakref
 import tarfile
@@ -17,12 +18,13 @@ from fastapi.responses import FileResponse
 import mimetypes
 from urllib.parse import quote
 from pydantic import BaseModel, ConfigDict
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any, Tuple, TYPE_CHECKING
 import shutil
 import ast
 import json
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.types import Scope, Receive, Send
+if TYPE_CHECKING:
+    from starlette.types import Scope, Receive, Send
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
