@@ -1,5 +1,6 @@
 import pytest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from main import app, API_KEY, kernel_manager
 
@@ -145,3 +146,33 @@ def test_list_files_with_id_mapping(mock_list_files):
     assert file2_entry["fileId"] == file_id_2
     assert file2_entry["id"] == file_id_2
 
+
+@patch("main.kernel_manager.list_files")
+def test_list_files_http_exception(mock_list_files):
+    """Verifies that HTTPException is propagated."""
+    mock_list_files.side_effect = HTTPException(status_code=507, detail="Insufficient storage")
+
+    session_id = "test_session"
+    response = client.get(
+        f"/files/{session_id}",
+        headers={"X-API-Key": API_KEY}
+    )
+
+    assert response.status_code == 507
+    assert response.json()["detail"] == "Insufficient storage"
+
+
+@patch("main.kernel_manager.list_files")
+def test_list_files_generic_exception(mock_list_files, caplog):
+    """Verifies that generic exceptions return 500 and are logged."""
+    mock_list_files.side_effect = Exception("Unexpected error")
+
+    session_id = "test_session"
+    response = client.get(
+        f"/files/{session_id}",
+        headers={"X-API-Key": API_KEY}
+    )
+
+    assert response.status_code == 500
+    assert "Unexpected error" in response.json()["detail"]
+    assert "Error listing session files" in caplog.text

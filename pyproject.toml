@@ -25,5 +25,6 @@ pythonpath = ["."]
 dev = [
     "bandit>=1.9.4",
     "pyright>=1.1.409",
+    "pytest-cov>=7.1.0",
     "ruff>=0.15.12",
 ]
