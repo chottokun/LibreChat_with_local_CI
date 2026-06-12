@@ -1,5 +1,4 @@
 import threading
-import time
 import os
 from unittest.mock import MagicMock, patch
 from fastapi import HTTPException
@@ -20,18 +19,28 @@ def test_parallel_container_creation_respects_max_sessions():
     
     # Set capacity limit to 2
     with patch("main.RCE_MAX_SESSIONS", 2):
-        # We mock DOCKER_CLIENT.containers.run to simulate a slow Docker startup (0.1s delay)
+        # We mock DOCKER_CLIENT.containers.run to simulate a slow Docker startup
         mock_docker_client = MagicMock()
         
         container_run_calls = 0
         container_run_lock = threading.Lock()
         
+        # Coordination events
+        # signaled when the required number of threads are inside the mock
+        threads_started = threading.Event()
+        # signaled when threads are allowed to finish
+        can_finish = threading.Event()
+
         def slow_run(*args, **kwargs):
             nonlocal container_run_calls
             with container_run_lock:
                 container_run_calls += 1
-            # Simulate Docker API latency
-            time.sleep(0.1)
+                if container_run_calls == 2:
+                    threads_started.set()
+
+            # Wait until signaled to finish, or timeout to prevent deadlock
+            can_finish.wait(timeout=2)
+
             mock_container = MagicMock()
             mock_container.id = f"mock_container_{container_run_calls}"
             return mock_container
@@ -51,14 +60,24 @@ def test_parallel_container_creation_respects_max_sessions():
                 except Exception as e:
                     results.append(("exception", session_id, str(e)))
             
-            # Start 3 threads simultaneously for 3 different sessions
-            for i in range(3):
+            # Start first 2 threads (to fill capacity)
+            for i in range(2):
                 t = threading.Thread(target=attempt_start, args=(f"session_{i}",))
                 threads.append(t)
-                
-            for t in threads:
                 t.start()
-                
+
+            # Wait for the first 2 threads to be "in progress" (holding capacity slots)
+            if not threads_started.wait(timeout=2):
+                raise RuntimeError("Timeout waiting for threads to start")
+
+            # Start 3rd thread - should fail immediately as capacity is full (2 active/pending)
+            t3 = threading.Thread(target=attempt_start, args=("session_2",))
+            t3.start()
+            t3.join()
+
+            # Now allow the first 2 to finish
+            can_finish.set()
+
             for t in threads:
                 t.join()
                 
