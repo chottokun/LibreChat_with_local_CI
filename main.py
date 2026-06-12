@@ -496,9 +496,15 @@ class KernelManager:
         if not RCE_DATA_DIR_HOST:
             return {}
 
+        # Basic sanitization and validation of session_id to prevent path traversal
+        safe_sid = sanitize_id(session_id)
+        if not safe_sid:
+            logger.error("Invalid session ID for volume preparation: %s", session_id)
+            raise HTTPException(status_code=400, detail="Invalid session ID")
+
         # Use HOST path for Docker mounting, but ensure INTERNAL path exists for writing
-        session_dir_host = os.path.join(RCE_DATA_DIR_HOST, session_id)
-        session_dir_internal = os.path.join(RCE_DATA_DIR_INTERNAL, session_id)
+        session_dir_host = os.path.join(RCE_DATA_DIR_HOST, safe_sid)
+        session_dir_internal = os.path.join(RCE_DATA_DIR_INTERNAL, safe_sid)
         os.makedirs(session_dir_internal, exist_ok=True)
 
         return {session_dir_host: {'bind': '/mnt/data', 'mode': 'rw'}}
@@ -557,7 +563,12 @@ class KernelManager:
 
                 # Cleanup internal session directory if volume mounting was used
                 if RCE_DATA_DIR_INTERNAL:
-                    session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, session_id)
+                    # Sanitize to prevent accidental deletion outside shared volume
+                    safe_sid = sanitize_id(session_id)
+                    if not safe_sid:
+                         logger.warning("Attempted to cleanup session with invalid ID: %s", session_id)
+                         continue
+                    session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, safe_sid)
                     if os.path.exists(session_dir):
                         shutil.rmtree(session_dir, ignore_errors=True)
 
@@ -579,46 +590,59 @@ class KernelManager:
             await asyncio.sleep(60) # Run every minute
 
     def _put_archive_with_retry(self, session_id: str, container, path: str, data: bytes, external_session_id: Optional[str] = None):
+        # Sanitize session_id to prevent path traversal in error recovery logic
+        safe_sid = sanitize_id(session_id)
+        if not safe_sid:
+            raise HTTPException(status_code=400, detail="Invalid session ID")
+
         try:
             container.put_archive(path, data)
         except (docker.errors.APIError, docker.errors.NotFound):
             # Recovery: Force refresh and retry once
-            container = self.get_or_create_container(session_id, force_refresh=True, external_session_id=external_session_id)
+            container = self.get_or_create_container(safe_sid, force_refresh=True, external_session_id=external_session_id)
             container.put_archive(path, data)
 
     def upload_file(self, session_id: str, filename: str, content: bytes, external_session_id: Optional[str] = None):
-        # Sanitize filename to prevent path traversal
+        # Sanitize session_id and filename to prevent path traversal
+        safe_sid = sanitize_id(session_id)
+        if not safe_sid:
+            raise HTTPException(status_code=400, detail="Invalid session ID")
+
         safe_filename = os.path.basename(filename)
         if not safe_filename:
             raise HTTPException(status_code=400, detail="Invalid filename")
 
         if RCE_DATA_DIR_HOST:
-            session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, session_id)
+            session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, safe_sid)
             os.makedirs(session_dir, exist_ok=True)
             with open(os.path.join(session_dir, safe_filename), "wb") as f:
                 f.write(content)
-            logger.info("Uploaded file %s to volume (internal: %s) for session %s", safe_filename, session_dir, session_id)
+            logger.info("Uploaded file %s to volume (internal: %s) for session %s", safe_filename, session_dir, safe_sid)
             # Ensure container exists (even if it doesn't need to do anything now)
-            self.get_or_create_container(session_id, external_session_id=external_session_id)
+            self.get_or_create_container(safe_sid, external_session_id=external_session_id)
         else:
-            container = self.get_or_create_container(session_id, external_session_id=external_session_id)
+            container = self.get_or_create_container(safe_sid, external_session_id=external_session_id)
             tar_stream = io.BytesIO()
             with tarfile.open(fileobj=tar_stream, mode='w') as tar:
                 tar_info = tarfile.TarInfo(name=safe_filename)
                 tar_info.size = len(content)
                 tar.addfile(tar_info, io.BytesIO(content))
 
-            self._put_archive_with_retry(session_id, container, "/mnt/data", tar_stream.getvalue(), external_session_id)
-            logger.info("Uploaded file %s to session %s via put_archive", safe_filename, session_id)
+            self._put_archive_with_retry(safe_sid, container, "/mnt/data", tar_stream.getvalue(), external_session_id)
+            logger.info("Uploaded file %s to session %s via put_archive", safe_filename, safe_sid)
 
     def download_file(self, session_id: str, filename: str):
-        # Sanitize filename to prevent path traversal
+        # Sanitize session_id and filename to prevent path traversal
+        safe_sid = sanitize_id(session_id)
+        if not safe_sid:
+            raise HTTPException(status_code=400, detail="Invalid session ID")
+
         safe_filename = os.path.basename(filename)
         if not safe_filename:
             raise HTTPException(status_code=400, detail="Invalid filename")
 
         if RCE_DATA_DIR_HOST:
-            session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, session_id)
+            session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, safe_sid)
             filepath = os.path.join(session_dir, safe_filename)
             if os.path.exists(filepath):
                 with open(filepath, "rb") as f:
@@ -627,7 +651,7 @@ class KernelManager:
                 return content, mtime
             raise FileNotFoundError()
         else:
-            container = self.get_or_create_container(session_id)
+            container = self.get_or_create_container(safe_sid)
             try:
                 # get_archive returns a tuple: (stream, stat)
                 bits, stat = container.get_archive(f"/mnt/data/{safe_filename}")
@@ -1067,6 +1091,10 @@ async def download_session_file(
     """
     real_session_id, real_filename = kernel_manager.resolve_download_ids(session_id, filename)
     
+    # Basic validation of session_id to prevent path traversal to base directory
+    if not real_session_id:
+        raise HTTPException(status_code=400, detail="Invalid session ID")
+
     # Determine the file path if volume mounting is enabled
     in_memory_content = None
     try:
