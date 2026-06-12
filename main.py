@@ -343,6 +343,8 @@ class KernelManager:
     def resolve_download_ids(self, session_id: str, filename: str) -> Tuple[str, str]:
         """Resolves potential nanoid IDs for session and file to their real values."""
         s_session_id = sanitize_id(session_id)
+        if not s_session_id:
+            raise HTTPException(status_code=400, detail="Invalid session ID")
         s_filename = os.path.basename(filename)
 
         with self.lock:
@@ -1073,6 +1075,15 @@ async def download_session_file(
         if RCE_DATA_DIR_HOST:
             session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, real_session_id)
             filepath = os.path.join(session_dir, real_filename)
+
+            # Security: Ensure the path is within the designated data directory
+            # and that real_session_id is not empty (already handled by resolve_download_ids but good to be safe)
+            abs_base = os.path.realpath(RCE_DATA_DIR_INTERNAL)
+            abs_file = os.path.realpath(filepath)
+            if os.path.commonpath([abs_base, abs_file]) != abs_base or not real_session_id:
+                logger.warning("Path traversal attempt blocked: %s", filepath)
+                raise HTTPException(status_code=403, detail="Forbidden")
+
             if not os.path.exists(filepath):
                  raise HTTPException(status_code=404, detail="File not found")
             tmp_filepath = filepath
