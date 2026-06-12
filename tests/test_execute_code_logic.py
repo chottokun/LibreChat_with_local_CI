@@ -110,7 +110,13 @@ def test_execute_in_container_logic(kernel_manager):
     mock_res = MagicMock()
     mock_container.exec_run.return_value = mock_res
 
-    res = kernel_manager._execute_in_container(mock_container, code_content, path, filename)
+    params = main.ExecutionParams(
+        code_content=code_content,
+        path=path,
+        filename=filename,
+        lang="python"
+    )
+    res = kernel_manager._execute_in_container(mock_container, params)
 
     assert res == mock_res
 

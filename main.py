@@ -16,8 +16,29 @@ from fastapi.security import APIKeyHeader
 from fastapi.responses import FileResponse
 import mimetypes
 from urllib.parse import quote
-from pydantic import BaseModel, ConfigDict
+from dataclasses import dataclass
 from typing import List, Optional, Dict, Any, Tuple
+from pydantic import BaseModel, ConfigDict
+
+
+@dataclass
+class ExecutionParams:
+    """Parameters for code execution within a container."""
+    code_content: str
+    path: str
+    filename: str
+    lang: str = "python"
+
+
+@dataclass
+class ArchiveParams:
+    """Parameters for uploading an archive to a container with retry logic."""
+    session_id: str
+    path: str
+    data: bytes
+    external_session_id: Optional[str] = None
+
+
 import shutil
 import ast
 import json
@@ -578,13 +599,13 @@ class KernelManager:
                 logger.error("Error in cleanup loop: %s", e)
             await asyncio.sleep(60) # Run every minute
 
-    def _put_archive_with_retry(self, session_id: str, container, path: str, data: bytes, external_session_id: Optional[str] = None):
+    def _put_archive_with_retry(self, container, params: ArchiveParams):
         try:
-            container.put_archive(path, data)
+            container.put_archive(params.path, params.data)
         except (docker.errors.APIError, docker.errors.NotFound):
             # Recovery: Force refresh and retry once
-            container = self.get_or_create_container(session_id, force_refresh=True, external_session_id=external_session_id)
-            container.put_archive(path, data)
+            container = self.get_or_create_container(params.session_id, force_refresh=True, external_session_id=params.external_session_id)
+            container.put_archive(params.path, params.data)
 
     def upload_file(self, session_id: str, filename: str, content: bytes, external_session_id: Optional[str] = None):
         # Sanitize filename to prevent path traversal
@@ -608,7 +629,13 @@ class KernelManager:
                 tar_info.size = len(content)
                 tar.addfile(tar_info, io.BytesIO(content))
 
-            self._put_archive_with_retry(session_id, container, "/mnt/data", tar_stream.getvalue(), external_session_id)
+            archive_params = ArchiveParams(
+                session_id=session_id,
+                path="/mnt/data",
+                data=tar_stream.getvalue(),
+                external_session_id=external_session_id
+            )
+            self._put_archive_with_retry(container, archive_params)
             logger.info("Uploaded file %s to session %s via put_archive", safe_filename, session_id)
 
     def download_file(self, session_id: str, filename: str):
@@ -674,24 +701,24 @@ class KernelManager:
                 return [f for f in files if f]
         return []
 
-    def _execute_in_container(self, container, code_content: str, path: str, filename: str, lang: str = "python"):
+    def _execute_in_container(self, container, params: ExecutionParams):
         """
         Uploads code to the container and executes it.
         """
         tar_stream = io.BytesIO()
         with tarfile.open(fileobj=tar_stream, mode='w') as tar:
-            code_bytes = code_content.encode('utf-8')
-            tar_info = tarfile.TarInfo(name=filename)
+            code_bytes = params.code_content.encode('utf-8')
+            tar_info = tarfile.TarInfo(name=params.filename)
             tar_info.size = len(code_bytes)
             tar.addfile(tar_info, io.BytesIO(code_bytes))
 
         container.put_archive("/mnt/data", tar_stream.getvalue())
 
-        cmd = ["python3", path]
-        if lang in ["bash", "sh"]:
-            cmd = ["bash", path]
-        elif lang == "r":
-            cmd = ["Rscript", path]
+        cmd = ["python3", params.path]
+        if params.lang in ["bash", "sh"]:
+            cmd = ["bash", params.path]
+        elif params.lang == "r":
+            cmd = ["Rscript", params.path]
 
         return container.exec_run(
             cmd=cmd,
@@ -730,13 +757,19 @@ class KernelManager:
             else:
                 wrapped_code = code
 
+            exec_params = ExecutionParams(
+                code_content=wrapped_code,
+                path=container_path,
+                filename=code_filename,
+                lang=lang
+            )
             try:
-                exec_result = self._execute_in_container(container, wrapped_code, container_path, code_filename, lang)
+                exec_result = self._execute_in_container(container, exec_params)
             except (docker.errors.APIError, docker.errors.NotFound):
                 # Optimistic assumption failed: container might be stopped or gone
                 # Recovery: Force refresh and retry once
                 container = self.get_or_create_container(session_id, force_refresh=True, external_session_id=external_session_id)
-                exec_result = self._execute_in_container(container, wrapped_code, container_path, code_filename, lang)
+                exec_result = self._execute_in_container(container, exec_params)
             
             stdout, stderr = exec_result.output
 
