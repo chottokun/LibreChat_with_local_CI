@@ -22,7 +22,12 @@ def test_put_archive_with_retry_not_found(km):
     mock_container_old.put_archive.side_effect = docker.errors.NotFound("Container not found")
 
     with patch.object(km, 'get_or_create_container', return_value=mock_container_new) as mock_get_create:
-        km._put_archive_with_retry(session_id, mock_container_old, "/path", b"data")
+        options = main.PutArchiveOptions(
+            path="/path",
+            data=b"data",
+            session_id=session_id
+        )
+        km._put_archive_with_retry(mock_container_old, options)
 
         # Verify get_or_create_container was called with force_refresh=True
         mock_get_create.assert_called_once_with(session_id, force_refresh=True, external_session_id=None)

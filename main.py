@@ -1,4 +1,5 @@
 import io
+from dataclasses import dataclass
 import weakref
 import tarfile
 import logging
@@ -46,6 +47,13 @@ if not DISABLE_AUTH and not API_KEY:
 _raw_data_dir = os.environ.get("RCE_DATA_DIR_HOST", os.environ.get("RCE_DATA_DIR", ""))
 # RCE_DATA_DIR_INTERNAL is the path inside this API container (used for writing files)
 RCE_DATA_DIR_INTERNAL = os.environ.get("RCE_DATA_DIR_INTERNAL", "/app/shared_volumes/sessions")
+
+@dataclass
+class PutArchiveOptions:
+    path: str
+    data: bytes
+    session_id: str
+    external_session_id: Optional[str] = None
 
 # 1. Validation for RCE_DATA_DIR
 if not _raw_data_dir or "absolute/path/to/your/project/sessions" in _raw_data_dir:
@@ -578,13 +586,13 @@ class KernelManager:
                 logger.error("Error in cleanup loop: %s", e)
             await asyncio.sleep(60) # Run every minute
 
-    def _put_archive_with_retry(self, session_id: str, container, path: str, data: bytes, external_session_id: Optional[str] = None):
+    def _put_archive_with_retry(self, container, options: PutArchiveOptions):
         try:
-            container.put_archive(path, data)
+            container.put_archive(options.path, options.data)
         except (docker.errors.APIError, docker.errors.NotFound):
             # Recovery: Force refresh and retry once
-            container = self.get_or_create_container(session_id, force_refresh=True, external_session_id=external_session_id)
-            container.put_archive(path, data)
+            container = self.get_or_create_container(options.session_id, force_refresh=True, external_session_id=options.external_session_id)
+            container.put_archive(options.path, options.data)
 
     def upload_file(self, session_id: str, filename: str, content: bytes, external_session_id: Optional[str] = None):
         # Sanitize filename to prevent path traversal
@@ -608,7 +616,13 @@ class KernelManager:
                 tar_info.size = len(content)
                 tar.addfile(tar_info, io.BytesIO(content))
 
-            self._put_archive_with_retry(session_id, container, "/mnt/data", tar_stream.getvalue(), external_session_id)
+            options = PutArchiveOptions(
+                path="/mnt/data",
+                data=tar_stream.getvalue(),
+                session_id=session_id,
+                external_session_id=external_session_id
+            )
+            self._put_archive_with_retry(container, options)
             logger.info("Uploaded file %s to session %s via put_archive", safe_filename, session_id)
 
     def download_file(self, session_id: str, filename: str):
