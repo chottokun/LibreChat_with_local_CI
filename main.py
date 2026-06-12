@@ -579,12 +579,18 @@ class KernelManager:
             await asyncio.sleep(60) # Run every minute
 
     def _put_archive_with_retry(self, session_id: str, container, path: str, data: bytes, external_session_id: Optional[str] = None):
-        try:
-            container.put_archive(path, data)
-        except (docker.errors.APIError, docker.errors.NotFound):
-            # Recovery: Force refresh and retry once
-            container = self.get_or_create_container(session_id, force_refresh=True, external_session_id=external_session_id)
-            container.put_archive(path, data)
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                container.put_archive(path, data)
+                return
+            except (docker.errors.APIError, docker.errors.NotFound) as e:
+                if attempt == max_retries - 1:
+                    logger.error("Failed to put archive for session %s after %d attempts: %s", session_id, max_retries, e)
+                    raise
+                logger.warning("Retry %d/%d: put_archive failed for session %s, refreshing container: %s", attempt + 1, max_retries, session_id, e)
+                # Recovery: Force refresh and retry
+                container = self.get_or_create_container(session_id, force_refresh=True, external_session_id=external_session_id)
 
     def upload_file(self, session_id: str, filename: str, content: bytes, external_session_id: Optional[str] = None):
         # Sanitize filename to prevent path traversal
