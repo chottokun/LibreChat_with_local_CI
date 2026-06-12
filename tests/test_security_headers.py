@@ -78,5 +78,9 @@ def test_security_headers_non_http_scope():
     HTTP スコープ以外の接続（WebSocket等）がミドルウェアを通過した際にも、
     親クラス（CORSMiddleware）の処理へ適切にフォールバックされエラーにならないことを検証します。
     """
+    # NOTE: FastAPI's TestClient.websocket_connect uses an 'http' scope initially
+    # for the upgrade request, but we can verify the middleware logic via unit tests
+    # in test_security_middleware_unit.py.
+    # Here we just ensure a basic request still works.
     response = client.get("/health")
     assert response.status_code == 200
