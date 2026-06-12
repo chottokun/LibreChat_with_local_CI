@@ -590,3 +590,60 @@ def test_recover_containers_id_access_failure_double_fault_extended(kernel_manag
                 if "ID access failed" in str(call.args[1]):
                     found_outer_error = True
         assert found_outer_error
+
+def test_resolve_session_id_mapping_exists(kernel_manager):
+    """
+    Verify that resolve_session_id returns the internal UUID when a mapping
+    from the sanitized NanoID exists.
+    """
+    nanoid = "nanoid123"
+    internal_uuid = "uuid-456"
+    kernel_manager.nanoid_to_session[nanoid] = internal_uuid
+
+    assert kernel_manager.resolve_session_id(nanoid) == internal_uuid
+
+def test_resolve_session_id_fallback(kernel_manager):
+    """
+    Verify that resolve_session_id returns the sanitized ID itself when
+    no mapping exists.
+    """
+    nanoid = "unknown-id"
+    assert kernel_manager.resolve_session_id(nanoid) == nanoid
+
+def test_resolve_session_id_with_sanitization(kernel_manager):
+    """
+    Verify that the input session_id is sanitized before performing the lookup.
+    """
+    dirty_id = "dirty!@#id"
+    sanitized_id = "dirtyid"
+    internal_uuid = "uuid-789"
+
+    kernel_manager.nanoid_to_session[sanitized_id] = internal_uuid
+
+    # It should sanitize "dirty!@#id" to "dirtyid" and then find the mapping
+    assert kernel_manager.resolve_session_id(dirty_id) == internal_uuid
+
+def test_resolve_session_id_fallback_with_sanitization(kernel_manager):
+    """
+    Verify that when no mapping exists, it returns the sanitized version of
+     the input ID.
+    """
+    dirty_id = "new!@#session"
+    sanitized_id = "newsession"
+
+    assert kernel_manager.resolve_session_id(dirty_id) == sanitized_id
+
+def test_resolve_session_id_empty_string(kernel_manager):
+    """
+    Verify that an empty string input results in an empty string return
+    (after sanitization).
+    """
+    assert kernel_manager.resolve_session_id("") == ""
+
+def test_resolve_session_id_none(kernel_manager):
+    """
+    Verify that None input (if it happens at runtime) is handled gracefully
+    by sanitize_id and returns an empty string.
+    """
+    # Type ignore because we are testing runtime behavior against type hints
+    assert kernel_manager.resolve_session_id(None) == "" # type: ignore
