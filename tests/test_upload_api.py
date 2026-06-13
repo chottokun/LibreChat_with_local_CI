@@ -17,7 +17,7 @@ def reset_kernel_manager():
     yield
 
 def test_upload_success_entity_id():
-    with patch.object(kernel_manager, 'upload_file') as mock_upload:
+    with patch.object(kernel_manager, 'upload_files_batch') as mock_upload:
         # Pass multiple files with the same key "files"
         files = [
             ("files", ("test1.txt", b"content1")),
@@ -38,7 +38,7 @@ def test_upload_success_entity_id():
         assert data["files"][1]["filename"] == "test2.txt"
 
         # Verify kernel_manager was called
-        assert mock_upload.call_count == 2
+        assert mock_upload.call_count == 1
 
         # Check if session mapping was created
         nanoid_session = data["session_id"]
@@ -46,7 +46,7 @@ def test_upload_success_entity_id():
             assert nanoid_session in kernel_manager.nanoid_to_session
 
 def test_upload_success_session_id_field():
-    with patch.object(kernel_manager, 'upload_file') as mock_upload:
+    with patch.object(kernel_manager, 'upload_files_batch') as mock_upload:
         response = client.post(
             "/upload",
             headers={"X-API-Key": API_KEY},
@@ -63,7 +63,7 @@ def test_upload_success_session_id_field():
         mock_upload.assert_called_once()
 
 def test_upload_success_query_param():
-    with patch.object(kernel_manager, 'upload_file'):
+    with patch.object(kernel_manager, 'upload_files_batch'):
         response = client.post(
             "/upload?session_id=query-session",
             headers={"X-API-Key": API_KEY},
@@ -74,7 +74,7 @@ def test_upload_success_query_param():
         assert response.json()["session_id"] == "query-session"
 
 def test_upload_no_session_id_generates_one():
-    with patch.object(kernel_manager, 'upload_file'):
+    with patch.object(kernel_manager, 'upload_files_batch'):
         response = client.post(
             "/upload",
             headers={"X-API-Key": API_KEY},
@@ -106,7 +106,7 @@ def test_upload_unauthorized():
 
 def test_upload_priority_files_over_file():
     # Tests that 'files' takes priority over 'file' if both are present
-    with patch.object(kernel_manager, 'upload_file') as mock_upload:
+    with patch.object(kernel_manager, 'upload_files_batch') as mock_upload:
         files = [
             ("files", ("f1.txt", b"c1")),
             ("file", ("f2.txt", b"c2"))
@@ -131,7 +131,7 @@ def test_upload_duplicate_files_reuses_id():
     同一セッション内で同じファイル（名前およびコンテンツ）を複数回アップロードした際に、
     新しいファイルIDを発行せず、既存のファイルIDが再利用されることを検証します。
     """
-    with patch.object(kernel_manager, 'upload_file'):
+    with patch.object(kernel_manager, 'upload_files_batch'):
         session_id = "test-session-dup"
         filename = "duplicate.txt"
         content = b"some shared file content"
@@ -164,7 +164,7 @@ def test_upload_invalid_filename_empty():
     ファイル名が空、またはスラッシュのみのディレクトリ構造のように basename が空になる場合に、
     400 Bad Request ("Invalid filename") を返して拒絶されることを検証します。
     """
-    with patch.object(kernel_manager, 'upload_file'):
+    with patch.object(kernel_manager, 'upload_files_batch'):
         # スラッシュのみでファイル名が空になるケース
         response = client.post(
             "/upload",
@@ -209,7 +209,7 @@ def test_upload_updates_global_state():
     グローバル状態（LAST_UPLOADED_SESSION_ID / LAST_UPLOAD_TIME）が正しく更新されることを検証します。
     """
     import time
-    with patch.object(kernel_manager, 'upload_file'):
+    with patch.object(kernel_manager, 'upload_files_batch'):
         session_id = "global-test-session"
 
         # アップロードの実行
@@ -232,7 +232,7 @@ def test_upload_generic_exception_handling():
     アップロード処理中に想定外のエラー（例外など）が発生した場合に、
     適切に捕捉され 500 Internal Server Error を返すことを検証します。
     """
-    with patch.object(kernel_manager, 'upload_file', side_effect=Exception("Unexpected error during save")):
+    with patch.object(kernel_manager, 'upload_files_batch', side_effect=Exception("Unexpected error during save")):
         response = client.post(
             "/upload",
             headers={"X-API-Key": API_KEY},
@@ -270,7 +270,7 @@ def test_upload_sanitizes_path():
     パスセグメント付きファイル名（例: path/to/secret.txt）でアップロードされた際、
     パスが除去され、ファイル名の basename（secret.txt）のみで処理されることを検証します。
     """
-    with patch.object(kernel_manager, 'upload_file') as mock_upload:
+    with patch.object(kernel_manager, 'upload_files_batch') as mock_upload:
         files = [("files", ("path/to/secret.txt", b"content"))]
         response = client.post(
             "/upload",
@@ -282,5 +282,5 @@ def test_upload_sanitizes_path():
         assert response.status_code == 200
         mock_upload.assert_called_once()
         # パスが除去され、basename である secret.txt になっていること
-        assert mock_upload.call_args[0][1] == "secret.txt"
+        assert mock_upload.call_args[0][1][0][0] == "secret.txt"
 
