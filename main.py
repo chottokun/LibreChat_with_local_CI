@@ -10,6 +10,7 @@ import time
 import asyncio
 import string
 import secrets
+from unittest.mock import MagicMock
 from fastapi import FastAPI, HTTPException, Security, UploadFile, File, Form, Query, BackgroundTasks, Response, Request
 from contextlib import asynccontextmanager
 from fastapi.security import APIKeyHeader
@@ -797,17 +798,10 @@ class CodeResponse(BaseModel):
     files: Optional[List[FileInfo]] = []
     images: List[Dict[str, Any]] = [] # Matplotlib images or other plot captures
 
-# 4. Endpoints
+# 4. Helper Functions
 
-@app.post("/exec", response_model=CodeResponse)
-@app.post("/run/exec", response_model=CodeResponse)
-async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
-    """
-    Executes code in a sandboxed Docker container.
-    """
-    logger.info("Exec request received. Request body: %s", req.model_dump())
-    
-    # Extract session_id from files array if root session_id is missing (LibreChat behavior)
+def _get_effective_session_id(req: CodeRequest) -> Optional[str]:
+    """Extracts session_id from CodeRequest with various fallbacks."""
     effective_session_id = req.session_id
     if not effective_session_id and req.files and len(req.files) > 0:
         # Pydantic parses this into FileInput objects, or it's a dict if extra fields are allowed
@@ -822,64 +816,89 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
     # Fallback to user_id to ensure container reuse and improve performance
     if not effective_session_id and req.user_id:
         effective_session_id = f"user_{req.user_id}"
-        
-    # 【重要フォールバック】直近5分以内にファイルのアップロード成功実績があり、
-    # かつ実行リクエストで session_id が渡されてこなかった場合（bash_tool等のヘッダーバグやセッション連携漏れ）
-    # 直前のアップロードセッションIDを自動で再利用し、同一コンテナ内にファイルを配置した状態で実行します。
+
+    # Fallback to last uploaded session
     if not effective_session_id:
         global LAST_UPLOADED_SESSION_ID, LAST_UPLOAD_TIME
         if LAST_UPLOADED_SESSION_ID and (time.time() - LAST_UPLOAD_TIME < 300):
             effective_session_id = LAST_UPLOADED_SESSION_ID
             logger.info("Fallback activated! Re-using last uploaded session ID: %s", effective_session_id)
-        
-    logger.info("Effective session ID for exec: %s", effective_session_id)
 
-    # Validate execution language
+    return effective_session_id
+
+def _get_validated_lang(req: CodeRequest) -> str:
+    """Extracts and validates the execution language."""
     requested_lang = (req.lang or "python").lower()
     SUPPORTED_LANGUAGES = {"python", "py", "bash", "sh", "r"}
     if requested_lang not in SUPPORTED_LANGUAGES:
         logger.error("Unsupported language requested: %s", req.lang)
         raise HTTPException(status_code=400, detail=f"Unsupported language: {req.lang}. Supported: python, bash, r")
+    return requested_lang
 
-    # Resolve nanoid session ID if provided
-    sid = effective_session_id or generate_nanoid()
-    from unittest.mock import MagicMock
+def _resolve_session_pair(sid: str) -> Tuple[str, str]:
+    """Resolves (real_session_id, nanoid_session) pair, handling mocks."""
     if isinstance(kernel_manager, MagicMock):
         # Fallback for unittest mocks that do not have get_or_create_session_mapping configured
         real_session_id = kernel_manager.resolve_session_id(sanitize_id(sid))
         nanoid_session = sid
     else:
         real_session_id, nanoid_session = kernel_manager.get_or_create_session_mapping(sid)
+    return real_session_id, nanoid_session
+
+def _map_filenames_to_nanoids(nanoid_session: str, filenames: List[str]) -> Dict[str, str]:
+    """Ensures all filenames have a NanoID mapping and returns a mapping dict (filename -> nanoid)."""
+    with kernel_manager.lock:
+        if nanoid_session not in kernel_manager.file_id_map:
+            kernel_manager.file_id_map[nanoid_session] = {}
+
+        # Mapping: filename -> nanoid_id
+        mapping = {v: k for k, v in kernel_manager.file_id_map[nanoid_session].items()}
+
+        for f in filenames:
+            if f not in mapping:
+                nanoid_file = generate_nanoid()
+                kernel_manager.file_id_map[nanoid_session][nanoid_file] = f
+                mapping[f] = nanoid_file
+    return mapping
+
+# 5. Endpoints
+
+@app.post("/exec", response_model=CodeResponse)
+@app.post("/run/exec", response_model=CodeResponse)
+async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
+    """
+    Executes code in a sandboxed Docker container.
+    """
+    logger.info("Exec request received. Request body: %s", req.model_dump())
+
+    effective_session_id = _get_effective_session_id(req)
+    logger.info("Effective session ID for exec: %s", effective_session_id)
+
+    # Validate execution language
+    requested_lang = _get_validated_lang(req)
+
+    # Resolve nanoid session ID if provided
+    sid = effective_session_id or generate_nanoid()
+    real_session_id, nanoid_session = _resolve_session_pair(sid)
     
     # Run in sandbox
     result = await asyncio.to_thread(
         kernel_manager.execute_code,
         real_session_id,
         req.code,
-        lang=(req.lang or "python").lower(),
+        lang=requested_lang,
         external_session_id=nanoid_session
     )
     # List generated files and format them for LibreChat native ingestion
     current_files = await asyncio.to_thread(kernel_manager.list_files, real_session_id, external_session_id=nanoid_session)
-    structured_files = []
     
-    # Initialize file mapping for this session
-    with kernel_manager.lock:
-        if nanoid_session not in kernel_manager.file_id_map:
-            kernel_manager.file_id_map[nanoid_session] = {}
-        # Pre-calculate reverse mapping once to avoid O(N^2) inside the loop
-        existing_filenames_to_ids = {v: k for k, v in kernel_manager.file_id_map[nanoid_session].items()}
+    # Ensure all current_files have a nanoid mapping
+    mapping = _map_filenames_to_nanoids(nanoid_session, current_files)
 
-        # Ensure all current_files have a nanoid mapping (inside lock for atomicity and efficiency)
-        for f in current_files:
-            if f not in existing_filenames_to_ids:
-                nanoid_file = generate_nanoid()
-                kernel_manager.file_id_map[nanoid_session][nanoid_file] = f
-                existing_filenames_to_ids[f] = nanoid_file
-    
+    structured_files = []
     for f in current_files:
         mime_type, _ = mimetypes.guess_type(f)
-        nanoid_file = existing_filenames_to_ids[f]
+        nanoid_file = mapping[f]
 
         structured_files.append({
             "id": nanoid_file,
@@ -928,13 +947,7 @@ async def upload_files(
 
         logger.info("Files found in request: %s", [f.filename for f in upload_list])
 
-        from unittest.mock import MagicMock
-        if isinstance(kernel_manager, MagicMock):
-            # Fallback for unittest mocks that do not have get_or_create_session_mapping configured
-            real_session_id = kernel_manager.resolve_session_id(sanitize_id(sid))
-            nanoid_session = sid
-        else:
-            real_session_id, nanoid_session = kernel_manager.get_or_create_session_mapping(sid)
+        real_session_id, nanoid_session = _resolve_session_pair(sid)
 
         async def process_file(f):
             if not f.filename:
@@ -955,22 +968,8 @@ async def upload_files(
         LAST_UPLOAD_TIME = time.time()
         logger.info("Recorded last uploaded session ID: %s", sid)
 
-        uploaded_files = []
-        with kernel_manager.lock:
-            if nanoid_session not in kernel_manager.file_id_map:
-                kernel_manager.file_id_map[nanoid_session] = {}
-
-            existing_ids = {v: k for k, v in kernel_manager.file_id_map[nanoid_session].items()}
-
-            for filename in results:
-                if filename in existing_ids:
-                    file_id = existing_ids[filename]
-                else:
-                    file_id = generate_nanoid()
-                    kernel_manager.file_id_map[nanoid_session][file_id] = filename
-                    existing_ids[filename] = file_id
-
-                uploaded_files.append({"fileId": file_id, "filename": filename})
+        mapping = _map_filenames_to_nanoids(nanoid_session, results)
+        uploaded_files = [{"fileId": mapping[filename], "filename": filename} for filename in results]
         
         # Standardize response structure
         res = {
