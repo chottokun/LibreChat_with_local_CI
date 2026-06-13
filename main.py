@@ -12,7 +12,7 @@ import string
 import secrets
 from fastapi import FastAPI, HTTPException, Security, UploadFile, File, Form, Query, BackgroundTasks, Response, Request
 from contextlib import asynccontextmanager
-from fastapi.security import APIKeyHeader
+from fastapi.security import APIKeyHeader, HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse
 import mimetypes
 from urllib.parse import quote
@@ -79,11 +79,13 @@ RCE_MANAGED_BY_VALUE = "librechat-rce"
 # 1. 認証スキームの設定
 # クエリパラメータによるAPIキーフォールバックを許可するため、auto_error=False に設定
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+bearer_scheme = HTTPBearer(auto_error=False)
 
 async def get_api_key(
     request: Request = None,
     api_key_h: Optional[str] = Security(api_key_header),
-    api_key_q: Optional[str] = Query(None, alias="api_key")
+    api_key_q: Optional[str] = Query(None, alias="api_key"),
+    token: Optional[HTTPAuthorizationCredentials] = Security(bearer_scheme)
 ):
     # テスト環境用に認証をスキップする設定が有効な場合、即座に通過させる
     if DISABLE_AUTH:
@@ -91,28 +93,27 @@ async def get_api_key(
 
     # さまざまなリクエストクライアント（LibreChatやOpen WebUIなど）からの接続に対応するため、
     # 複数のヘッダー形式やクエリパラメータを順次フォールバックしてパースする。
-    auth_key = None
-    x_api_key = None
     
-    if request is not None and hasattr(request, "headers"):
-        # A. Authorization: Bearer <key> ヘッダーの確認 (LibreChatのデフォルト動作)
-        auth_header = request.headers.get("Authorization")
-        if auth_header and auth_header.startswith("Bearer "):
-            auth_key = auth_header.split(" ")[1]
-            
-        # B. 小文字の x-api-key ヘッダーの確認
-        x_api_key = request.headers.get("x-api-key")
+    # A. Authorization: Bearer <key> ヘッダーの確認 (FastAPI HTTPBearerを使用)
+    auth_key = token.credentials if isinstance(token, HTTPAuthorizationCredentials) else None
 
-    # 単体テスト時のデフォルト値（FastAPI Security/Query オブジェクト）のフィルタリング
-    # テスト環境から直接呼び出された場合、引数がないとデフォルト値のSecurity/Queryオブジェクトが渡るため
+    # B. X-API-Key ヘッダー (api_key_header 経由)
     h_key = api_key_h if isinstance(api_key_h, str) else None
+
+    # C. クエリパラメータ (Query 経由)
     q_key = api_key_q if isinstance(api_key_q, str) else None
 
+    # D. フォールバック: 手動での x-api-key ヘッダー取得 (既存互換性のため)
+    manual_x_api_key = None
+    if request is not None and hasattr(request, "headers"):
+        manual_x_api_key = request.headers.get("x-api-key")
+
     # 全ての候補をマージして検証
-    key = h_key or q_key or auth_key or x_api_key
+    key = auth_key or h_key or q_key or manual_x_api_key
     
     # 期待される APIキーと不一致の場合は 401 拒否とする
-    if key != API_KEY:
+    # Timing attack を防ぐため、secrets.compare_digest を使用
+    if not (key and secrets.compare_digest(key, API_KEY)):
         # トラブルシューティングの容易化のため、受け取ったキーと期待されたキー、全ヘッダーのデバッグ警告を出力
         logger.warning(
             "Authentication failure in get_api_key! Received key: %s, Expected key (API_KEY): %s. "
