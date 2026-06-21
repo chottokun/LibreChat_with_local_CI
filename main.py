@@ -18,6 +18,7 @@ import mimetypes
 from urllib.parse import quote
 from pydantic import BaseModel, ConfigDict
 from typing import List, Optional, Dict, Any, Tuple
+from concurrent.futures import ThreadPoolExecutor
 import shutil
 import ast
 import json
@@ -534,39 +535,53 @@ class KernelManager:
         except Exception as e:
             logger.error("Error during container recovery: %s", e)
 
+    def _cleanup_single_session(self, session_id: str, data: Optional[Dict[str, Any]]):
+        """Internal helper to perform the actual I/O for cleaning up a session."""
+        try:
+            # Cleanup internal session directory if volume mounting was used
+            if RCE_DATA_DIR_INTERNAL:
+                session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, session_id)
+                if os.path.exists(session_dir):
+                    shutil.rmtree(session_dir, ignore_errors=True)
+
+            if data:
+                container = data.get("container")
+                if container:
+                    container.stop(timeout=5)
+                    # Since remove=True was used, it should be gone now.
+        except Exception as e:
+            logger.error("Error cleaning up session %s: %s", session_id, e)
+
     def cleanup_sessions(self):
         """Stops and removes containers that have exceeded the TTL."""
         now = time.time()
-        to_delete = []
+        expired_sessions = []
         with self.lock:
             for session_id, data in self.active_kernels.items():
                 if now - data["last_accessed"] > RCE_SESSION_TTL:
-                    to_delete.append(session_id)
+                    expired_sessions.append(session_id)
 
-        for session_id in to_delete:
+        if not expired_sessions:
+            return
+
+        cleanup_tasks = []
+        for session_id in expired_sessions:
             logger.info("Cleaning up idle session: %s", session_id)
-            try:
-                with self.lock:
-                    # Clean up ID mappings
-                    nanoid_session = self.session_to_nanoid.pop(session_id, None)
-                    if nanoid_session:
-                        self.nanoid_to_session.pop(nanoid_session, None)
-                        self.file_id_map.pop(nanoid_session, None)
+            with self.lock:
+                # Clean up ID mappings
+                nanoid_session = self.session_to_nanoid.pop(session_id, None)
+                if nanoid_session:
+                    self.nanoid_to_session.pop(nanoid_session, None)
+                    self.file_id_map.pop(nanoid_session, None)
 
-                    data = self.active_kernels.pop(session_id, None)
+                data = self.active_kernels.pop(session_id, None)
 
-                # Cleanup internal session directory if volume mounting was used
-                if RCE_DATA_DIR_INTERNAL:
-                    session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, session_id)
-                    if os.path.exists(session_dir):
-                        shutil.rmtree(session_dir, ignore_errors=True)
+            cleanup_tasks.append((session_id, data))
 
-                if data:
-                    container = data["container"]
-                    container.stop(timeout=5)
-                    # Since remove=True was used, it should be gone now.
-            except Exception as e:
-                logger.error("Error cleaning up session %s: %s", session_id, e)
+        # Perform I/O operations (directory removal and container stopping) in parallel
+        with ThreadPoolExecutor(max_workers=min(len(cleanup_tasks), 20)) as executor:
+            for session_id, data in cleanup_tasks:
+                executor.submit(self._cleanup_single_session, session_id, data)
 
     async def cleanup_loop(self):
         """Background loop for periodic cleanup."""
