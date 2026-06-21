@@ -40,6 +40,7 @@ def test_refresh_container_reload_exception_logs_and_recovers(kernel_manager, ca
         return new_container
 
     kernel_manager.start_new_container_unlocked = MagicMock(side_effect=mock_start_new_unlocked)
+    kernel_manager.start_new_container = MagicMock(side_effect=mock_start_new_unlocked)
 
     with caplog.at_level(logging.ERROR):
         # Execute with force_refresh=True to ensure reload() is called
@@ -52,7 +53,7 @@ def test_refresh_container_reload_exception_logs_and_recovers(kernel_manager, ca
         # Verify session was popped (start_new_container_unlocked was called,
         # and result is the new container)
         assert result == new_container
-        kernel_manager.start_new_container_unlocked.assert_called_once_with(session_id, None)
+        kernel_manager.start_new_container.assert_called_once_with(session_id, None)
 
 def test_refresh_container_start_exception_logs_and_recovers(kernel_manager, caplog):
     """
@@ -81,6 +82,7 @@ def test_refresh_container_start_exception_logs_and_recovers(kernel_manager, cap
         return new_container
 
     kernel_manager.start_new_container_unlocked = MagicMock(side_effect=mock_start_new_unlocked)
+    kernel_manager.start_new_container = MagicMock(side_effect=mock_start_new_unlocked)
 
     with caplog.at_level(logging.ERROR):
         # Execute with force_refresh=True to ensure we enter the refresh block
@@ -92,4 +94,4 @@ def test_refresh_container_start_exception_logs_and_recovers(kernel_manager, cap
 
         # Verify session was popped and new container created
         assert result == new_container
-        kernel_manager.start_new_container_unlocked.assert_called_once_with(session_id, None)
+        kernel_manager.start_new_container.assert_called_once_with(session_id, None)
