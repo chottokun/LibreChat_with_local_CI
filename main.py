@@ -267,6 +267,20 @@ def sanitize_id(id_str: str) -> str:
     # This prevents path traversal and other injection attacks.
     return "".join(c for c in id_str if c.isalnum() or c in ('-', '_'))
 
+def _get_session_ids(sid: str) -> Tuple[str, str]:
+    """
+    Resolves a provided session ID to a real internal session ID and returns the pair.
+    Includes a fallback for unittest mocks that do not have get_or_create_session_mapping configured.
+    """
+    from unittest.mock import MagicMock
+    if isinstance(kernel_manager, MagicMock):
+        # Fallback for unittest mocks that do not have get_or_create_session_mapping configured
+        real_session_id = kernel_manager.resolve_session_id(sanitize_id(sid))
+        nanoid_session = sid
+    else:
+        real_session_id, nanoid_session = kernel_manager.get_or_create_session_mapping(sid)
+    return real_session_id, nanoid_session
+
 class WeakrefRLock:
     """A wrapper around threading.RLock that supports weak references."""
     def __init__(self):
@@ -843,13 +857,7 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
 
     # Resolve nanoid session ID if provided
     sid = effective_session_id or generate_nanoid()
-    from unittest.mock import MagicMock
-    if isinstance(kernel_manager, MagicMock):
-        # Fallback for unittest mocks that do not have get_or_create_session_mapping configured
-        real_session_id = kernel_manager.resolve_session_id(sanitize_id(sid))
-        nanoid_session = sid
-    else:
-        real_session_id, nanoid_session = kernel_manager.get_or_create_session_mapping(sid)
+    real_session_id, nanoid_session = _get_session_ids(sid)
     
     # Run in sandbox
     result = await asyncio.to_thread(
@@ -928,13 +936,7 @@ async def upload_files(
 
         logger.info("Files found in request: %s", [f.filename for f in upload_list])
 
-        from unittest.mock import MagicMock
-        if isinstance(kernel_manager, MagicMock):
-            # Fallback for unittest mocks that do not have get_or_create_session_mapping configured
-            real_session_id = kernel_manager.resolve_session_id(sanitize_id(sid))
-            nanoid_session = sid
-        else:
-            real_session_id, nanoid_session = kernel_manager.get_or_create_session_mapping(sid)
+        real_session_id, nanoid_session = _get_session_ids(sid)
 
         async def process_file(f):
             if not f.filename:
