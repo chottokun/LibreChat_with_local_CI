@@ -75,7 +75,7 @@ FastAPI側は、Docker SDK for Python (`docker-py`) を使用して、コンテ�
 ### `KernelManager` で行われる主要な設定パラメータ
 
 ```python
-def start_new_container_unlocked(self, session_id: str, external_session_id: Optional[str] = None):
+def start_new_container(self, session_id: str, external_session_id: Optional[str] = None):
     # 同時最大セッション数制限（サービス容量上限の制御）
     if len(self.active_kernels) >= RCE_MAX_SESSIONS:
         raise HTTPException(status_code=503, detail="Server is at capacity.")
