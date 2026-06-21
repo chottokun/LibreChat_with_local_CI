@@ -300,6 +300,7 @@ class KernelManager:
         self.nanoid_to_session: Dict[str, str] = {}
         self.session_to_nanoid: Dict[str, str] = {}
         self.file_id_map: Dict[str, Dict[str, str]] = {}  # {nanoid_session_id: {nanoid_file_id: filename}}
+        self._cached_config: Optional[Dict[str, Any]] = None
 
     def _get_session_lock(self, session_id: str) -> WeakrefRLock:
         """Gets or creates a session-specific lock."""
@@ -473,23 +474,29 @@ class KernelManager:
 
     def _get_container_config(self) -> Dict[str, Any]:
         """Parses resource limits and configuration from environment variables."""
-        mem_limit = os.environ.get("RCE_MEM_LIMIT", "512m")
-        cpu_limit_nano = int(os.environ.get("RCE_CPU_LIMIT", "500000000")) # 0.5 CPU default
-        network_enabled = os.environ.get("RCE_NETWORK_ENABLED", "false").lower() == "true"
-        gpu_enabled = os.environ.get("RCE_GPU_ENABLED", "false").lower() == "true"
-        
-        device_requests = []
-        if gpu_enabled:
-            device_requests.append(
-                docker.types.DeviceRequest(count=-1, capabilities=[['gpu']])
-            )
+        if self._cached_config is None:
+            mem_limit = os.environ.get("RCE_MEM_LIMIT", "512m")
+            cpu_limit_nano = int(os.environ.get("RCE_CPU_LIMIT", "500000000")) # 0.5 CPU default
+            network_enabled = os.environ.get("RCE_NETWORK_ENABLED", "false").lower() == "true"
+            gpu_enabled = os.environ.get("RCE_GPU_ENABLED", "false").lower() == "true"
 
-        return {
-            "mem_limit": mem_limit,
-            "nano_cpus": cpu_limit_nano,
-            "network_disabled": not network_enabled,
-            "device_requests": device_requests
-        }
+            device_requests = []
+            if gpu_enabled:
+                device_requests.append(
+                    docker.types.DeviceRequest(count=-1, capabilities=[['gpu']])
+                )
+
+            self._cached_config = {
+                "mem_limit": mem_limit,
+                "nano_cpus": cpu_limit_nano,
+                "network_disabled": not network_enabled,
+                "device_requests": device_requests
+            }
+
+        # Return a copy to prevent callers from corrupting the cache
+        config = self._cached_config.copy()
+        config["device_requests"] = list(self._cached_config["device_requests"])
+        return config
 
     def _prepare_volumes(self, session_id: str) -> Dict[str, Dict[str, str]]:
         """Prepares session directory and returns volume mapping if enabled."""
