@@ -783,8 +783,8 @@ class KernelManager:
             if container and container_path:
                 try:
                     container.exec_run(cmd=["rm", container_path])
-                except Exception: # nosec B110
-                    pass
+                except Exception:
+                    logger.warning("Failed to remove temporary file %s in session %s", container_path, session_id)
 
 kernel_manager = KernelManager()
 
