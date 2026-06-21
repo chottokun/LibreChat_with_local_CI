@@ -1,8 +1,7 @@
-import pytest
 import docker
 import logging
 from fastapi.testclient import TestClient
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from main import app, API_KEY, kernel_manager
 
 client = TestClient(app)

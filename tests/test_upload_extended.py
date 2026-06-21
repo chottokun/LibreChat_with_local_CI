@@ -1,5 +1,4 @@
 import pytest
-import time
 import main
 import uuid
 from fastapi.testclient import TestClient
@@ -26,7 +25,7 @@ def test_exec_fallback_to_last_upload():
     Verify that the global LAST_UPLOADED_SESSION_ID set by /upload
     is correctly used as a fallback in /exec (L832-833).
     """
-    with patch.object(kernel_manager, 'upload_file'):
+    with patch.object(kernel_manager, 'upload_files_batch'):
         with patch.object(kernel_manager, 'execute_code') as mock_exec:
             with patch.object(kernel_manager, 'list_files', return_value=[]):
                 mock_exec.return_value = {"stdout": "ok", "stderr": "", "exit_code": 0}
@@ -58,7 +57,7 @@ def test_upload_multiple_files_one_invalid():
     Verify that if any file in a multi-file upload has an invalid filename,
     the request returns a 400 error.
     """
-    with patch.object(kernel_manager, 'upload_file'):
+    with patch.object(kernel_manager, 'upload_files_batch'):
         files = [
             ("files", ("valid.txt", b"content")),
             ("files", ("/", b"invalid")) # Basename is empty, should trigger 400
@@ -77,7 +76,7 @@ def test_upload_special_characters_session_id_mapping():
     Verify that session IDs with special characters are correctly sanitized internally
     but the original ID is preserved in the mapping and response.
     """
-    with patch.object(kernel_manager, 'upload_file') as mock_upload:
+    with patch.object(kernel_manager, 'upload_files_batch') as mock_upload:
         special_sid = "session!@$ %^&*()"
         response = client.post(
             "/upload",

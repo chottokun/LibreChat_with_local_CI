@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from main import app, API_KEY, kernel_manager

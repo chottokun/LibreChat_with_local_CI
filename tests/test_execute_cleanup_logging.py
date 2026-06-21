@@ -1,7 +1,7 @@
 import pytest
 import logging
 import os
-from unittest.mock import MagicMock, patch, ANY
+from unittest.mock import MagicMock, patch
 import docker
 
 # Mock docker.from_env and set env vars before importing main to prevent side effects

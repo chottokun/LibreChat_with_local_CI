@@ -26,7 +26,7 @@ import ast
 import json
 from fastapi.middleware.cors import CORSMiddleware
 if TYPE_CHECKING:
-    from starlette.types import Scope, Receive, Send
+    from starlette.types import Scope, Send
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -280,7 +280,6 @@ def _get_session_ids(sid: str) -> Tuple[str, str]:
     Resolves a provided session ID to a real internal session ID and returns the pair.
     Includes a fallback for unittest mocks that do not have get_or_create_session_mapping configured.
     """
-    from unittest.mock import MagicMock
     if isinstance(kernel_manager, MagicMock):
         # Fallback for unittest mocks that do not have get_or_create_session_mapping configured
         real_session_id = kernel_manager.resolve_session_id(sanitize_id(sid))
