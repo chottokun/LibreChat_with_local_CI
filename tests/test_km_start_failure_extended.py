@@ -16,9 +16,9 @@ def kernel_manager():
     km.active_kernels = {} # Clear it for each test
     return km
 
-def test_start_new_container_unlocked_exec_failure(kernel_manager, mock_docker_client):
+def test_start_new_container_exec_failure(kernel_manager, mock_docker_client):
     """
-    Test that KernelManager.start_new_container_unlocked correctly raises a 500 HTTPException
+    Test that KernelManager.start_new_container correctly raises a 500 HTTPException
     when the container.exec_run call fails during initialization, and that the container is stopped.
     Verifies main.py:403 error handler.
     """
@@ -32,7 +32,7 @@ def test_start_new_container_unlocked_exec_failure(kernel_manager, mock_docker_c
 
     with patch("main.logger") as mock_logger:
         with pytest.raises(HTTPException) as excinfo:
-            kernel_manager.start_new_container_unlocked(session_id)
+            kernel_manager.start_new_container(session_id)
 
         assert excinfo.value.status_code == 500
         assert "Failed to start sandbox" in excinfo.value.detail
