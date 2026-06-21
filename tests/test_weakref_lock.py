@@ -1,7 +1,5 @@
 import threading
 import weakref
-import pytest
-import os
 from main import WeakrefRLock
 
 def test_weakref_lock_basic_acquire_release():
@@ -15,8 +13,8 @@ def test_weakref_lock_context_manager():
     lock = WeakrefRLock()
     with lock:
         # 他のスレッドからは取得できないはず
-        def try_acquire(l, result):
-            result.append(l.acquire(blocking=False))
+        def try_acquire(lock_obj, result):
+            result.append(lock_obj.acquire(blocking=False))
 
         res = []
         t = threading.Thread(target=try_acquire, args=(lock, res))
