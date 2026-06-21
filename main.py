@@ -125,10 +125,45 @@ async def get_api_key(
         raise HTTPException(status_code=401, detail="Invalid API Key")
     return key
 
+
+def _create_last_res_assign(value: ast.expr) -> ast.Assign:
+    """ASTノードを作成: __last_res__ = <value>"""
+    return ast.Assign(
+        targets=[ast.Name(id="__last_res__", ctx=ast.Store())], value=value
+    )
+
+
+def _create_last_res_if_print() -> ast.If:
+    """ASTノードを作成: if __last_res__ is not None: print(repr(__last_res__))"""
+    return ast.If(
+        test=ast.Compare(
+            left=ast.Name(id="__last_res__", ctx=ast.Load()),
+            ops=[ast.IsNot()],
+            comparators=[ast.Constant(value=None)],
+        ),
+        body=[
+            ast.Expr(
+                value=ast.Call(
+                    func=ast.Name(id="print", ctx=ast.Load()),
+                    args=[
+                        ast.Call(
+                            func=ast.Name(id="repr", ctx=ast.Load()),
+                            args=[ast.Name(id="__last_res__", ctx=ast.Load())],
+                            keywords=[],
+                        )
+                    ],
+                    keywords=[],
+                )
+            )
+        ],
+        orelse=[],
+    )
+
+
 def wrap_code(code: str) -> str:
     """
-    Wraps the last expression in print(repr(...)) if it's an expression.
-    This mimics Jupyter/Notebook behavior where the last expression is automatically displayed.
+    最後の式が評価式の場合、print(repr(...)) でラップします。
+    Jupyter Notebookのように、最後の式が自動で表示される挙動を模倣します。
     """
     try:
         tree = ast.parse(code)
@@ -137,50 +172,18 @@ def wrap_code(code: str) -> str:
 
         last_node = tree.body[-1]
         if isinstance(last_node, ast.Expr):
-            # Wrap the expression in:
+            # 式をラップする:
             # __last_res__ = <expression>
             # if __last_res__ is not None: print(repr(__last_res__))
-            # This mimics Jupyter/Notebook behavior.
-
-            # Create: __last_res__ = <last_node.value>
-            assign_node = ast.Assign(
-                targets=[ast.Name(id='__last_res__', ctx=ast.Store())],
-                value=last_node.value
-            )
-
-            # Create: if __last_res__ is not None: print(repr(__last_res__))
-            if_node = ast.If(
-                test=ast.Compare(
-                    left=ast.Name(id='__last_res__', ctx=ast.Load()),
-                    ops=[ast.IsNot()],
-                    comparators=[ast.Constant(value=None)]
-                ),
-                body=[
-                    ast.Expr(
-                        value=ast.Call(
-                            func=ast.Name(id='print', ctx=ast.Load()),
-                            args=[
-                                ast.Call(
-                                    func=ast.Name(id='repr', ctx=ast.Load()),
-                                    args=[ast.Name(id='__last_res__', ctx=ast.Load())],
-                                    keywords=[]
-                                )
-                            ],
-                            keywords=[]
-                        )
-                    )
-                ],
-                orelse=[]
-            )
-
-            tree.body[-1] = assign_node
-            tree.body.append(if_node)
+            tree.body[-1] = _create_last_res_assign(last_node.value)
+            tree.body.append(_create_last_res_if_print())
             ast.fix_missing_locations(tree)
             return ast.unparse(tree)
     except Exception:
-        # If parsing fails (e.g. syntax error), return original code and let it fail during execution
+        # パースに失敗した場合は、元のコードをそのまま返して実行時にエラーとします。
         return code
     return code
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
