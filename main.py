@@ -649,6 +649,9 @@ class KernelManager:
                 container = self.get_or_create_container(safe_sid, force_refresh=True, external_session_id=external_session_id)
 
     def upload_file(self, session_id: str, filename: str, content: bytes, external_session_id: Optional[str] = None):
+        if not content:
+            raise HTTPException(status_code=400, detail="File content is empty")
+
         # Sanitize session_id and filename to prevent path traversal
         safe_sid = sanitize_id(session_id)
         if not safe_sid:
