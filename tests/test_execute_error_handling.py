@@ -84,7 +84,7 @@ def test_execute_code_retry_success_uses_new_container(kernel_manager):
         mock_container_old.exec_run.assert_not_called()
 
 def test_execute_code_cleanup_exception_ignored(kernel_manager):
-    """Test that exceptions during cleanup are silently ignored."""
+    """Test that exceptions during cleanup are caught and don't affect result."""
     session_id = "test_session"
     code = "1 + 1"
 
@@ -95,6 +95,7 @@ def test_execute_code_cleanup_exception_ignored(kernel_manager):
     mock_res.exit_code = 0
     mock_res.output = (b"ok", b"")
 
+    # We catch any Exception during cleanup
     mock_container.exec_run.side_effect = Exception("Cleanup failed")
 
     with patch.object(kernel_manager, '_execute_in_container', return_value=mock_res):
