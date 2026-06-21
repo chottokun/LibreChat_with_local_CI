@@ -637,24 +637,33 @@ class KernelManager:
         if not safe_filename:
             raise HTTPException(status_code=400, detail="Invalid filename")
 
-        if RCE_DATA_DIR_HOST:
-            session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, safe_sid)
-            os.makedirs(session_dir, exist_ok=True)
-            with open(os.path.join(session_dir, safe_filename), "wb") as f:
-                f.write(content)
-            logger.info("Uploaded file %s to volume (internal: %s) for session %s", safe_filename, session_dir, safe_sid)
-            # Ensure container exists (even if it doesn't need to do anything now)
-            self.get_or_create_container(safe_sid, external_session_id=external_session_id)
-        else:
-            container = self.get_or_create_container(safe_sid, external_session_id=external_session_id)
-            tar_stream = io.BytesIO()
-            with tarfile.open(fileobj=tar_stream, mode='w') as tar:
-                tar_info = tarfile.TarInfo(name=safe_filename)
-                tar_info.size = len(content)
-                tar.addfile(tar_info, io.BytesIO(content))
+        try:
+            if RCE_DATA_DIR_HOST:
+                session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, safe_sid)
+                os.makedirs(session_dir, exist_ok=True)
+                with open(os.path.join(session_dir, safe_filename), "wb") as f:
+                    f.write(content)
+                logger.info("Uploaded file %s to volume (internal: %s) for session %s", safe_filename, session_dir, safe_sid)
+                # Ensure container exists (even if it doesn't need to do anything now)
+                self.get_or_create_container(safe_sid, external_session_id=external_session_id)
+            else:
+                container = self.get_or_create_container(safe_sid, external_session_id=external_session_id)
+                tar_stream = io.BytesIO()
+                with tarfile.open(fileobj=tar_stream, mode='w') as tar:
+                    tar_info = tarfile.TarInfo(name=safe_filename)
+                    tar_info.size = len(content)
+                    tar.addfile(tar_info, io.BytesIO(content))
 
-            self._put_archive_with_retry(safe_sid, container, "/mnt/data", tar_stream.getvalue(), external_session_id)
-            logger.info("Uploaded file %s to session %s via put_archive", safe_filename, safe_sid)
+                self._put_archive_with_retry(safe_sid, container, "/mnt/data", tar_stream.getvalue(), external_session_id)
+                logger.info("Uploaded file %s to session %s via put_archive", safe_filename, safe_sid)
+        except docker.errors.NotFound:
+            logger.error(f"Container not found for session {safe_sid} during upload")
+            raise HTTPException(status_code=404, detail="Session not found")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error uploading file: {str(e)}")
+            raise HTTPException(status_code=500, detail=str(e))
 
     def download_file(self, session_id: str, filename: str):
         # Sanitize session_id and filename to prevent path traversal
