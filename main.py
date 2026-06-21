@@ -681,6 +681,62 @@ class KernelManager:
             logger.error(f"Error uploading file: {str(e)}")
             raise HTTPException(status_code=500, detail=str(e))
 
+    def upload_files_batch(self, session_id: str, files: List[Tuple[str, bytes]], external_session_id: Optional[str] = None):
+        """Uploads multiple files at once, optimizing Docker API calls."""
+        if not files:
+            return
+
+        # Sanitize session_id to prevent path traversal
+        safe_sid = sanitize_id(session_id)
+        if not safe_sid:
+            raise HTTPException(status_code=400, detail="Invalid session ID")
+
+        if RCE_DATA_DIR_HOST:
+            session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, safe_sid)
+            os.makedirs(session_dir, exist_ok=True)
+            for filename, content in files:
+                safe_filename = os.path.basename(filename)
+                if not safe_filename:
+                    continue
+                with open(os.path.join(session_dir, safe_filename), "wb") as f:
+                    f.write(content)
+            logger.info("Uploaded %d files to volume for session %s", len(files), safe_sid)
+            self.get_or_create_container(safe_sid, external_session_id=external_session_id)
+        else:
+            container = self.get_or_create_container(safe_sid, external_session_id=external_session_id)
+            tar_stream = io.BytesIO()
+            with tarfile.open(fileobj=tar_stream, mode='w') as tar:
+                for filename, content in files:
+                    safe_filename = os.path.basename(filename)
+                    if not safe_filename:
+                        continue
+                    tar_info = tarfile.TarInfo(name=safe_filename)
+                    tar_info.size = len(content)
+                    tar.addfile(tar_info, io.BytesIO(content))
+
+            self._put_archive_with_retry(safe_sid, container, "/mnt/data", tar_stream.getvalue(), external_session_id)
+            logger.info("Uploaded %d files to session %s via put_archive", len(files), safe_sid)
+
+    def get_file_id_mapping(self, nanoid_session: str, filenames: List[str]) -> Dict[str, str]:
+        """
+        Ensures all filenames have a NanoID mapping and returns a filename-to-file_id dict.
+        """
+        with self.lock:
+            if nanoid_session not in self.file_id_map:
+                self.file_id_map[nanoid_session] = {}
+
+            id_map = self.file_id_map[nanoid_session]
+            # Create a reverse map for lookups: filename -> file_id
+            filename_to_id = {v: k for k, v in id_map.items()}
+
+            for f in filenames:
+                if f not in filename_to_id:
+                    file_id = generate_nanoid()
+                    id_map[file_id] = f
+                    filename_to_id[f] = file_id
+
+            return filename_to_id
+
     def download_file(self, session_id: str, filename: str):
         # Sanitize session_id and filename to prevent path traversal
         safe_sid = sanitize_id(session_id)
@@ -942,25 +998,12 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
         result = await result
     # List generated files and format them for LibreChat native ingestion
     current_files = await asyncio.to_thread(kernel_manager.list_files, real_session_id, external_session_id=nanoid_session)
+    filename_to_id = kernel_manager.get_file_id_mapping(nanoid_session, current_files)
+    
     structured_files = []
-    
-    # Initialize file mapping for this session
-    with kernel_manager.lock:
-        if nanoid_session not in kernel_manager.file_id_map:
-            kernel_manager.file_id_map[nanoid_session] = {}
-        # Pre-calculate reverse mapping once to avoid O(N^2) inside the loop
-        existing_filenames_to_ids = {v: k for k, v in kernel_manager.file_id_map[nanoid_session].items()}
-
-        # Ensure all current_files have a nanoid mapping (inside lock for atomicity and efficiency)
-        for f in current_files:
-            if f not in existing_filenames_to_ids:
-                nanoid_file = generate_nanoid()
-                kernel_manager.file_id_map[nanoid_session][nanoid_file] = f
-                existing_filenames_to_ids[f] = nanoid_file
-    
     for f in current_files:
         mime_type, _ = mimetypes.guess_type(f)
-        nanoid_file = existing_filenames_to_ids[f]
+        nanoid_file = filename_to_id[f]
 
         structured_files.append({
             "id": nanoid_file,
@@ -997,11 +1040,9 @@ async def upload_files(
         # Support both 'entity_id' (LibreChat default) and 'session_id' (form or query)
         sid = entity_id or session_id or session_id_query
         if not sid:
-            # If no session ID is provided, we generate one.
             sid = generate_nanoid()
             logger.info("No session ID provided in upload. Generated new one: %s", sid)
 
-        # Handle 'files' or 'file' field
         upload_list = files or file
         if not upload_list:
             logger.error("No files provided in upload request")
@@ -1011,49 +1052,37 @@ async def upload_files(
 
         real_session_id, nanoid_session = _get_session_ids(sid)
 
-        async def process_file(f):
+        async def read_file_content(f):
             if not f.filename:
                 raise HTTPException(status_code=400, detail="Invalid filename")
             content = await f.read()
             safe_filename = os.path.basename(f.filename)
             if not safe_filename:
                 raise HTTPException(status_code=400, detail="Invalid filename")
-            await asyncio.to_thread(kernel_manager.upload_file, real_session_id, safe_filename, content, external_session_id=nanoid_session)
-            return safe_filename
+            return safe_filename, content
 
-        # Parallelize file reading and uploading
-        results = await asyncio.gather(*[process_file(f) for f in upload_list])
+        # Read all files in parallel
+        file_data = await asyncio.gather(*[read_file_content(f) for f in upload_list])
 
-        # 直近でアップロードに成功したセッション情報をグローバルに記録
+        # Perform batch upload
+        await asyncio.to_thread(kernel_manager.upload_files_batch, real_session_id, file_data, external_session_id=nanoid_session)
+
+        # Record last upload for session fallback
         global LAST_UPLOADED_SESSION_ID, LAST_UPLOAD_TIME
         LAST_UPLOADED_SESSION_ID = sid
         LAST_UPLOAD_TIME = time.time()
         logger.info("Recorded last uploaded session ID: %s", sid)
 
-        uploaded_files = []
-        with kernel_manager.lock:
-            if nanoid_session not in kernel_manager.file_id_map:
-                kernel_manager.file_id_map[nanoid_session] = {}
-
-            existing_ids = {v: k for k, v in kernel_manager.file_id_map[nanoid_session].items()}
-
-            for filename in results:
-                if filename in existing_ids:
-                    file_id = existing_ids[filename]
-                else:
-                    file_id = generate_nanoid()
-                    kernel_manager.file_id_map[nanoid_session][file_id] = filename
-                    existing_ids[filename] = file_id
-
-                uploaded_files.append({"fileId": file_id, "filename": filename})
+        # Get file mappings
+        filenames = [name for name, _ in file_data]
+        filename_to_id = kernel_manager.get_file_id_mapping(nanoid_session, filenames)
+        uploaded_files = [{"fileId": filename_to_id[name], "filename": name} for name in filenames]
         
-        # Standardize response structure
         res = {
             "message": "success",
             "session_id": sid,
             "files": uploaded_files
         }
-        # Flatten the first file for root-level access (LibreChat compatibility)
         if uploaded_files:
             res.update(uploaded_files[0])
             
