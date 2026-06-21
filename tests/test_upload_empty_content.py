@@ -2,7 +2,6 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from unittest.mock import patch
-import main
 from main import app, API_KEY, kernel_manager
 
 client = TestClient(app)

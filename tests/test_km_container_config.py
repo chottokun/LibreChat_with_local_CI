@@ -1,4 +1,3 @@
-import pytest
 import os
 import docker
 from unittest.mock import patch
@@ -9,6 +8,7 @@ def test_get_container_config_defaults():
     km = KernelManager()
     # Ensure environment is clean for this test
     with patch.dict(os.environ, {}, clear=True):
+        km._cached_config = None
         config = km._get_container_config()
 
     assert config["mem_limit"] == "512m"
@@ -24,6 +24,7 @@ def test_get_container_config_custom_limits():
         "RCE_CPU_LIMIT": "1000000000"
     }
     with patch.dict(os.environ, custom_env):
+        km._cached_config = None
         config = km._get_container_config()
 
     assert config["mem_limit"] == "1g"
@@ -35,16 +36,19 @@ def test_get_container_config_network_enabled():
 
     # Test True
     with patch.dict(os.environ, {"RCE_NETWORK_ENABLED": "true"}):
+        km._cached_config = None
         config = km._get_container_config()
         assert config["network_disabled"] is False
 
     # Test TRUE (case-insensitive)
     with patch.dict(os.environ, {"RCE_NETWORK_ENABLED": "TRUE"}):
+        km._cached_config = None
         config = km._get_container_config()
         assert config["network_disabled"] is False
 
     # Test false
     with patch.dict(os.environ, {"RCE_NETWORK_ENABLED": "false"}):
+        km._cached_config = None
         config = km._get_container_config()
         assert config["network_disabled"] is True
 
@@ -53,6 +57,7 @@ def test_get_container_config_gpu_enabled():
     km = KernelManager()
 
     with patch.dict(os.environ, {"RCE_GPU_ENABLED": "true"}):
+        km._cached_config = None
         config = km._get_container_config()
         assert len(config["device_requests"]) == 1
         req = config["device_requests"][0]
@@ -65,5 +70,6 @@ def test_get_container_config_gpu_disabled():
     km = KernelManager()
 
     with patch.dict(os.environ, {"RCE_GPU_ENABLED": "false"}):
+        km._cached_config = None
         config = km._get_container_config()
         assert config["device_requests"] == []

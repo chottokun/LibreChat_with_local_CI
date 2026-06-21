@@ -1082,6 +1082,8 @@ async def upload_files(
             if not f.filename:
                 raise HTTPException(status_code=400, detail="Invalid filename")
             content = await f.read()
+            if not content:
+                raise HTTPException(status_code=400, detail="File content is empty")
             safe_filename = os.path.basename(f.filename)
             if not safe_filename:
                 raise HTTPException(status_code=400, detail="Invalid filename")

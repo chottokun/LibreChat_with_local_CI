@@ -1,5 +1,4 @@
 import gc
-import pytest
 from main import KernelManager, WeakrefRLock
 
 def test_get_session_lock_consistency():

@@ -1,7 +1,6 @@
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 import os
-import main
 from main import KernelManager
 
 @pytest.fixture
