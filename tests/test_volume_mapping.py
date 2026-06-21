@@ -91,7 +91,7 @@ def test_session_id_resolution_flow():
             mock_exec.assert_called_with(internal_uuid, "print(2)", lang="py", external_session_id="uuid-1")
 
             # 3. Upload using nanoid should resolve to same internal UUID
-            with patch.object(real_km, 'upload_file') as mock_upload:
+            with patch.object(real_km, 'upload_files_batch') as mock_upload:
                 resp3 = client.post(
                     "/upload",
                     headers={"X-API-Key": main.API_KEY},
@@ -99,4 +99,4 @@ def test_session_id_resolution_flow():
                     files={"files": ("file.txt", b"data")}
                 )
                 assert resp3.status_code == 200
-                mock_upload.assert_called_once_with(internal_uuid, "file.txt", b"data", external_session_id="uuid-1")
+                mock_upload.assert_called_once_with(internal_uuid, [("file.txt", b"data")], external_session_id="uuid-1")

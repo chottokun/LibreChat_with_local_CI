@@ -695,31 +695,40 @@ class KernelManager:
         if not safe_sid:
             raise HTTPException(status_code=400, detail="Invalid session ID")
 
-        if RCE_DATA_DIR_HOST:
-            session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, safe_sid)
-            os.makedirs(session_dir, exist_ok=True)
-            for filename, content in files:
-                safe_filename = os.path.basename(filename)
-                if not safe_filename:
-                    continue
-                with open(os.path.join(session_dir, safe_filename), "wb") as f:
-                    f.write(content)
-            logger.info("Uploaded %d files to volume for session %s", len(files), safe_sid)
-            self.get_or_create_container(safe_sid, external_session_id=external_session_id)
-        else:
-            container = self.get_or_create_container(safe_sid, external_session_id=external_session_id)
-            tar_stream = io.BytesIO()
-            with tarfile.open(fileobj=tar_stream, mode='w') as tar:
+        try:
+            if RCE_DATA_DIR_HOST:
+                session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, safe_sid)
+                os.makedirs(session_dir, exist_ok=True)
                 for filename, content in files:
                     safe_filename = os.path.basename(filename)
                     if not safe_filename:
                         continue
-                    tar_info = tarfile.TarInfo(name=safe_filename)
-                    tar_info.size = len(content)
-                    tar.addfile(tar_info, io.BytesIO(content))
+                    with open(os.path.join(session_dir, safe_filename), "wb") as f:
+                        f.write(content)
+                logger.info("Uploaded %d files to volume for session %s", len(files), safe_sid)
+                self.get_or_create_container(safe_sid, external_session_id=external_session_id)
+            else:
+                container = self.get_or_create_container(safe_sid, external_session_id=external_session_id)
+                tar_stream = io.BytesIO()
+                with tarfile.open(fileobj=tar_stream, mode='w') as tar:
+                    for filename, content in files:
+                        safe_filename = os.path.basename(filename)
+                        if not safe_filename:
+                            continue
+                        tar_info = tarfile.TarInfo(name=safe_filename)
+                        tar_info.size = len(content)
+                        tar.addfile(tar_info, io.BytesIO(content))
 
-            self._put_archive_with_retry(safe_sid, container, "/mnt/data", tar_stream.getvalue(), external_session_id)
-            logger.info("Uploaded %d files to session %s via put_archive", len(files), safe_sid)
+                self._put_archive_with_retry(safe_sid, container, "/mnt/data", tar_stream.getvalue(), external_session_id)
+                logger.info("Uploaded %d files to session %s via put_archive", len(files), safe_sid)
+        except docker.errors.NotFound:
+            logger.error(f"Container not found for session {safe_sid} during upload")
+            raise HTTPException(status_code=404, detail="Session not found")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error uploading file: {str(e)}")
+            raise HTTPException(status_code=500, detail=str(e))
 
     def get_file_id_mapping(self, nanoid_session: str, filenames: List[str]) -> Dict[str, str]:
         """
@@ -946,6 +955,13 @@ def _get_effective_session_id(req: CodeRequest) -> Optional[str]:
         elif isinstance(first_file, dict):
             effective_session_id = first_file.get("session_id") or first_file.get("storage_session_id")
 
+    # Fallback to user_id to ensure container reuse and improve performance
+    if not effective_session_id and req.user_id:
+        effective_session_id = f"user_{req.user_id}"
+
+    # Fallback to last uploaded session
+    if not effective_session_id:
+        global LAST_UPLOADED_SESSION_ID, LAST_UPLOAD_TIME
         if LAST_UPLOADED_SESSION_ID and (time.time() - LAST_UPLOAD_TIME < 300):
             effective_session_id = LAST_UPLOADED_SESSION_ID
             logger.info("Fallback activated! Re-using last uploaded session ID: %s", effective_session_id)
@@ -1010,22 +1026,6 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
     for f in current_files:
         mime_type, _ = mimetypes.guess_type(f)
         nanoid_file = filename_to_id[f]
-        real_session_id,
-        req.code,
-        lang=requested_lang,
-        external_session_id=nanoid_session
-    )
-    # List generated files and format them for LibreChat native ingestion
-    current_files = await asyncio.to_thread(kernel_manager.list_files, real_session_id, external_session_id=nanoid_session)
-    
-    # Ensure all current_files have a nanoid mapping
-    mapping = _map_filenames_to_nanoids(nanoid_session, current_files)
-
-    structured_files = []
-    for f in current_files:
-        mime_type, _ = mimetypes.guess_type(f)
-        nanoid_file = mapping[f]
->>>>>>> origin/refactor-run-code-modular-helpers-10839878437343372735
 
         structured_files.append({
             "id": nanoid_file,
