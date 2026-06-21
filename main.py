@@ -25,7 +25,6 @@ import shutil
 import ast
 import json
 from fastapi.middleware.cors import CORSMiddleware
-
 if TYPE_CHECKING:
     from starlette.types import Scope, Receive, Send
 
@@ -214,7 +213,7 @@ class SecurityHeadersCORSMiddleware(CORSMiddleware):
     """
     SECURITY_DOWNLOAD_PREFIXES = ("/download", "/api/files/code/download", "/run/download")
 
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+    async def __call__(self, scope: Scope, receive, send: Send) -> None:
         if scope["type"] != "http":
             await super().__call__(scope, receive, send)
             return
