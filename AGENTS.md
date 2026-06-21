@@ -1,42 +1,81 @@
-# LibreChat ローカル RCE 開発・設計ガイド
+# LibreChat ローカル RCE 開発・設計ガイド (AI Agent用ガイドライン)
 
-本ドキュメントは、**LibreChat_with_local_CI** のコードベースを拡張・保守する開発者（コントリビューター）向けに、内部アーキテクチャ、APIプロトコル、実行環境（RCEカーネル）の拡張方法、およびテスト手順を解説する設計書です。
+本ドキュメントは、AIコーディングエージェント（および人間開発者）が本リポジトリのプログラムを変更・追加する際に遵守すべき**開発規約、コマンド手順、およびガードレール（禁止事項）**を定義する「取扱説明書」です。
 
 ---
 
-## 1. 全体アーキテクチャ
+## 1. プロジェクトコマンド手順 (AI実行用)
 
-本リポジトリは、LibreChat の「エージェント機能（Code Interpreter）」から送られるコード実行リクエストを受け取り、ローカルの隔離されたセキュアな Docker コンテナ内で実行して結果を返す **Custom RCE (Remote Code Execution) API サーバー**を実装しています。
+開発および検証フェーズにおいて、AIエージェントは以下のコマンドを順番に実行して整合性を担保しなければなりません。
 
-```
-+------------------+         REST API         +---------------------+
-|    LibreChat     | -----------------------> | Code Interpreter API| (main.py)
-| (Agent UI / App) | <----------------------- | (FastAPI / Port 8000|
-+------------------+     JSON / File stream   +---------------------+
-                                                        |
-                                                 Docker Socket Proxy
-                                                   (Port 2375/内部)
-                                                        |
-                                                        v
-                                              +---------------------+
-                                              | Ephemeral Sandboxes |
-                                              | [custom-rce-kernel] | (セッション毎に1コンテナ)
-                                              +---------------------+
+### 1.1 パッケージ同期
+```bash
+uv sync
 ```
 
-### コア技術スタック
+### 1.2 RCEカーネル（サンドボックスイメージ）のビルド
+```bash
+docker build -f Dockerfile.rce -t custom-rce-kernel:latest .
+```
 
-| カテゴリ | 技術 |
-|---|---|
-| API サーバー | FastAPI (Python 3.13+, `main.py`) |
-| パッケージ管理 | uv (`pyproject.toml`) |
-| コンテナ管理 | Docker Engine + Docker Socket Proxy |
-| サンドボックス | `custom-rce-kernel:latest` (Python 3.11-slim ベース) |
-| テスト | pytest (58ファイル、270以上の検証ケース) |
-| セキュリティ | 非root実行、リソース制限、Docker Socket Proxy による権限分離 |
-| 動作確認済み LibreChat | `ghcr.io/danny-avila/librechat:v0.8.6` (2026-06-01 リリース) |
+### 1.3 テストスイートの実行 (pytest)
+必ず以下の環境変数を定義した上で、一括で実行してください。
+```bash
+LIBRECHAT_CODE_API_KEY=test-secret-key uv run pytest tests/ -v
+```
 
-### プロジェクトファイル構成
+### 1.4 静的コード解析 (Ruff)
+```bash
+uv run ruff check . --fix
+```
+
+### 1.5 セキュリティスキャン (Bandit)
+```bash
+uv run bandit -r . -x ./tests,./.venv
+```
+
+---
+
+## 2. コア設計仕様と変更時のガードレール
+
+コードを変更・拡張する際、AIエージェントは以下の機能構造を維持しなければなりません。
+
+### 2.1 セッションIDの自動解決とフォールバック
+LibreChatが特定の操作で `session_id` を送信しないバグに対処するため、`main.py` の `run_code` エンドポイントは以下の優先順でセッションIDを特定します。このフォールバック順序やロジックを変更・削除しないでください。
+1. リクエストの `files` 配下に含まれる `session_id` もしくは `storage_session_id`
+2. `user_id` が存在する場合は `user_{user_id}`
+3. 直近5分以内にアップロードが成功した `LAST_UPLOADED_SESSION_ID`
+
+### 2.2 並行セッション作成の制御 (レースコンディション対策)
+コンテナ数が最大上限 `RCE_MAX_SESSIONS` に達する際のスレッドセーフなチェックを維持するため、以下の二重防御構造を崩さないでください。
+* **セッション個別ロック (`WeakrefRLock`)**: `weakref.WeakValueDictionary` を用いたスレッド分離ロック。
+* **作成中セッションの追跡 (`pending_sessions`)**: コンテナの起動完了までセッションIDを予約記録し、作成上限超過を防止。
+
+### 2.3 ファイルマッピング
+* ファイル走査処理は $O(N)$ の効率的な逆引きマップ構造（`get_file_id_mapping`）を用いています。$O(N^2)$ に悪化するようなループ探索に戻さないでください。
+
+---
+
+## 3. ガードレール（禁止事項）
+
+AIエージェントは、以下の事項を決して行ってはなりません。
+
+### 3.1 ローカル絶対パス記述の禁止 (再発防止)
+* **ドキュメント、ソースコード、テストコード、設定ファイル内のすべてにおいて、特定の個人環境に依存した絶対パス（例: `/home/username/Project/...`）を書き込んではいけません。**
+* パスを指定する場合は常に**相対パス**（例: `./docs/...`）を使用するか、ダミーの値（例: `/path/to/...` や `/tmp/...`）を用いて抽象化してください。
+
+### 3.2 CORSワイルドカード `*` の使用禁止
+* セキュリティ向上のため、`CORS_ALLOWED_ORIGINS` にワイルドカード `*` を含めることを禁止します。必ず明示的なホワイトリスト形式でバリデーションを行ってください。
+
+### 3.3 Docker Socket の直接マウント禁止
+* サンドボックスの隔離権限を分離するため、APIサーバーコンテナがホストの `/var/run/docker.sock` に直接アクセスできるようにマウントしてはいけません。必ず `tecnativa/docker-socket-proxy` を中継し、必要なAPIエンドポイントのみを制限付きで許可してください。
+
+### 3.4 サンドボックスコンテナのネットワーク無効化 (デフォルト)
+* セキュリティ上の情報漏洩対策として、コンテナ作成時におけるデフォルトのネットワーク遮断設定（`network_disabled: True`）を有効なまま維持してください。
+
+---
+
+## 4. プロジェクト構成
 
 ```
 LibreChat_with_local_CI/
@@ -45,382 +84,7 @@ LibreChat_with_local_CI/
 ├── rce_requirements.txt        # RCE カーネル内の Python パッケージ定義
 ├── Dockerfile.api              # API サーバー用コンテナイメージ
 ├── Dockerfile.rce              # RCE サンドボックス用コンテナイメージ
-├── Dockerfile.rce.gpu          # GPU 対応 RCE サンドボックス用コンテナイメージ
-├── docker-compose.yml          # 標準デプロイ構成（API + Docker Socket Proxy）
-├── docker-compose.gpu.yml      # GPU デプロイ構成
-├── docker-compose.librechat.yml # LibreChat 統合構成
-├── Caddyfile                   # リバースプロキシ設定
-├── librechat.yaml              # LibreChat 側の接続設定
-├── .env                        # 環境変数定義
-├── tests/                      # pytest テストスイート
-│   ├── conftest.py             # テスト共通フィクスチャ
-│   ├── test_api.py             # API エンドポイントテスト
-│   ├── test_kernel_manager.py  # KernelManager ユニットテスト
-│   ├── test_path_traversal.py  # パストラバーサル防御テスト
-│   ├── test_security_*.py      # セキュリティ関連テスト群
-│   ├── test_download_*.py      # ダウンロード機能テスト群
-│   ├── test_upload_api.py      # アップロード機能テスト
-│   └── ...                     # その他テストファイル
+├── docker-compose.yml          # 標準デプロイ構成
+├── tests/                      # pytest テストスイート（58ファイル、270以上の検証ケース）
 └── sessions/                   # セッションデータの永続化ディレクトリ
 ```
-
----
-
-## 2. API プロトコル仕様
-
-FastAPI (`main.py`) は、LibreChat の Code Interpreter 仕様に準拠したインターフェースを提供します。
-
-### 2.1 コード実行: `POST /exec`, `POST /run/exec`
-
-LibreChat からエージェント実行時に送信されるコードを実行します。
-
-**リクエスト形式:**
-
-```json
-{
-  "code": "print('Hello Dev')",
-  "lang": "py",
-  "session_id": "user-session-123",
-  "user_id": "user-456",
-  "files": [],
-  "args": []
-}
-```
-
-**処理フロー:**
-
-1. 送信された `session_id` に紐づく専用コンテナ（例: `rce_<uuid>_<hash>`）が存在するか確認
-2. 存在しない場合は、`RCE_IMAGE_NAME`（既定: `custom-rce-kernel:latest`）ベースの新コンテナを即時スピンアップ
-3. `docker exec` を用いてコンテナ内部でコードを評価（Python の場合は最終式の自動表示ラッピングあり）
-4. 実行後の出力（stdout / stderr）を取得し、生成されたファイル一覧とともに返却
-
-**レスポンス形式:**
-
-```json
-{
-  "stdout": "Hello Dev\n",
-  "stderr": "",
-  "exit_code": 0,
-  "output": "Hello Dev\n",
-  "result": "Hello Dev\n",
-  "status": "success",
-  "session_id": "nanoid-session-abc",
-  "files": [
-    {
-      "id": "nanoid-file-id",
-      "name": "output.csv",
-      "url": "/api/files/code/download/nanoid-session-abc/nanoid-file-id",
-      "type": "text/csv"
-    }
-  ],
-  "images": []
-}
-```
-
-**対応言語:** `python` / `py`, `bash` / `sh`, `r`
-
-### 2.2 ファイルアップロード: `POST /upload`
-
-アップロードされたファイルをセッションごとの永続ディレクトリに配置します。
-
-- `entity_id` / `session_id` / クエリパラメータの3種類でセッション指定をサポート
-- ディレクトリトラバーサル脆弱性を防ぐため、ファイルパスは `os.path.basename()` で厳格にサニタイズ
-- ボリュームマウントモード（高速）と `put_archive` モード（フォールバック）を自動選択
-
-### 2.3 ファイル一覧: `GET /files/{session_id}`
-
-セッションのサンドボックス内にあるファイル一覧を返却します。
-
-### 2.4 ファイルダウンロード
-
-複数のルートパターンをサポートしています:
-
-| エンドポイント | 用途 |
-|---|---|
-| `GET /download?session_id=...&filename=...` | クエリパラメータ方式 |
-| `GET /run/download?session_id=...&filename=...` | 同上（`/run` プレフィックス付き） |
-| `GET /download/{session_id}/{filename}` | パスパラメータ方式 |
-| `GET /run/download/{session_id}/{filename}` | 同上（`/run` プレフィックス付き） |
-| `GET /api/files/code/download/{session_id}/{filename}` | LibreChat ネイティブ形式 |
-
-- NanoID ベースのファイルID → 実ファイル名の解決を自動実行
-- 日本語ファイル名は RFC 5987 準拠の `filename*=utf-8''...` ヘッダーで安全に送信
-- CSV は `text/plain` で返却し、Chrome のセキュリティブロックを回避
-
-### 2.5 ヘルスチェック: `GET /health`
-
-```json
-{"status": "ok", "mode": "docker-sandboxed"}
-```
-
----
-
-## 3. KernelManager の設計
-
-`KernelManager` クラス（`main.py` 内）は、セッション管理とコンテナライフサイクルの中核です。
-
-### 3.1 セッション ID マッピング
-
-```
-LibreChat からの session_id (NanoID 等)
-    ↓ sanitize_id() でサニタイズ
-    ↓ get_or_create_session_mapping() で解決
-内部 UUID セッション ID (コンテナ名・ディレクトリ名に使用)
-```
-
-- `nanoid_to_session`: 外部ID → 内部UUID の正引きマップ
-- `session_to_nanoid`: 内部UUID → 外部ID の逆引きマップ
-- `file_id_map`: セッション毎の NanoID ファイルID → 実ファイル名 マップ
-
-### 3.2 コンテナライフサイクル
-
-1. **作成**: `get_or_create_container()` で遅延生成。最大 `RCE_MAX_SESSIONS` 個まで
-2. **リソース制限**: メモリ上限 (`RCE_MEM_LIMIT`)、CPU 制限 (`RCE_CPU_LIMIT`)、ネットワーク無効化（デフォルト）
-3. **自動復旧**: `recover_containers()` でAPI再起動時に既存コンテナを再認識
-4. **TTL 管理**: `cleanup_loop()` が60秒間隔で実行。`RCE_SESSION_TTL`（デフォルト3600秒）超過のセッションを自動削除
-5. **ファイル転送**: ボリュームマウントが有効なら直接 I/O、無効なら `put_archive` / `get_archive` でコンテナと通信
-
-### 3.3 セッションフォールバックロジック
-
-LibreChat が `session_id` を消失・未送信の場合のフォールバック優先順:
-
-1. `req.files[0].session_id` または `storage_session_id` から抽出
-2. `req.user_id` から `user_{user_id}` として生成
-3. 直近5分以内のアップロード実績がある場合、`LAST_UPLOADED_SESSION_ID` を再利用
-4. いずれも不可の場合、新規 NanoID を自動生成
-
-> **注意:** このフォールバックロジック周辺をリファクタリングする際は、ログ出力（`Received key: None` 等のデバッグメッセージ）の挙動に影響を及ぼさないよう配慮してください。
-
-### 3.4 並行セッション作成の制御とレースコンディション対策
-
-複数の並行リクエストが同時に新しいセッションを作成する際、`RCE_MAX_SESSIONS` で規定されたコンテナ上限チェックをすり抜けるレースコンディションを防ぐため、以下の二重防御策が実装されています。
-
-1. **セッション個別ロック (`WeakrefRLock`)**:
-   `weakref.WeakValueDictionary` を用いた、セッションIDごとに独立したロックオブジェクト。不要になったセッションロックはGCによって自動的に解放されるため、メモリリークを発生させることなく、特定セッションへの並行I/O要求を安全に直列化します。
-2. **作成中セッションの追跡 (`pending_sessions`)**:
-   コンテナが実際に起動して `active_kernels` に登録されるまでの間、起動処理中のセッションIDを一時的に `pending_sessions` 集合に予約記録します。上限チェック時には、稼働中のコンテナ数と起動処理中のセッション数の合算値を検証することで、並行起動による上限突破を完全に防ぎます。
-
-### 3.5 ファイルマッピングの O(N) 最適化
-
-`run_code` 実行時にコンテナ内の新規ファイル一覧を走査してIDを発行する処理において、従来 $O(N^2)$ であったマッピング検索ロジックを逆引きマップの活用などにより **$O(N)$** へ最適化。ファイル数が多いセッションにおけるパフォーマンスボトルネックを解消しました。
-
----
-
-## 4. RCE カーネル（実行用サンドボックス）の拡張
-
-コードが実際に走るコンテナイメージは `Dockerfile.rce` で定義されています。
-
-### 4.1 パッケージの追加方法
-
-1. `rce_requirements.txt` に必要なライブラリを記述
-2. 以下のコマンドを実行してカーネルを再ビルド:
-
-```bash
-docker build -f Dockerfile.rce -t custom-rce-kernel:latest .
-```
-
-**現在インストール済みのパッケージ:**
-
-- `pandas`, `numpy`, `scipy` — データ分析
-- `matplotlib`, `seaborn` — データ可視化
-- `japanize-matplotlib` — 日本語フォント対応
-
-> **開発者向け注記:** 日本語フォントを伴うデータ分析（Matplotlib によるグラフ描画など）の文字化けに対処するため、イメージのビルドプロセスで `japanize-matplotlib` が `sitecustomize.py` 経由で自動インポートされます。また、`fonts-ipafont-gothic` フォントパッケージも含まれています。
-
-### 4.2 GPU 対応カーネルの開発
-
-CUDA 対応モデルや重い数値計算を RCE 内で開発・テストする場合は、GPU 用の構成を使用します:
-
-```bash
-# GPU カーネルのビルド
-docker build -f Dockerfile.rce.gpu -t custom-rce-kernel:latest .
-
-# GPU 構成でのデプロイ
-docker compose -f docker-compose.yml -f docker-compose.gpu.yml up
-```
-
-- ベースイメージ: `nvidia/cuda:12.1.0-base-ubuntu22.04`
-- 環境変数 `RCE_GPU_ENABLED=true` の設定が必要
-
----
-
-## 5. 環境変数リファレンス
-
-| 変数名 | デフォルト値 | 説明 |
-|---|---|---|
-| `LIBRECHAT_CODE_API_KEY` | *(必須)* | API 認証キー。認証が有効な場合は設定必須 |
-| `DISABLE_CODE_API_AUTH` | `false` | `true` で認証を無効化（開発・テスト用） |
-| `RCE_IMAGE_NAME` | `custom-rce-kernel:latest` | サンドボックスに使用する Docker イメージ名 |
-| `RCE_DATA_DIR` / `RCE_DATA_DIR_HOST` | *(未設定)* | ホスト側のセッションデータディレクトリ |
-| `RCE_DATA_DIR_INTERNAL` | `/app/shared_volumes/sessions` | API コンテナ内のセッションデータパス |
-| `RCE_SESSION_TTL` | `3600` | セッションの生存期間（秒） |
-| `RCE_MAX_SESSIONS` | `100` | 同時実行可能な最大セッション数 |
-| `RCE_MEM_LIMIT` | `512m` | コンテナのメモリ上限 |
-| `RCE_CPU_LIMIT` | `500000000` | CPU 制限（ナノ秒単位、0.5 CPU） |
-| `RCE_NETWORK_ENABLED` | `false` | サンドボックスのネットワークアクセス |
-| `RCE_GPU_ENABLED` | `false` | GPU デバイスのパススルー |
-| `DOCKER_HOST` | `tcp://docker-proxy:2375` | Docker デーモンの接続先 |
-
----
-
-## 6. ローカル開発環境のセットアップ
-
-### 6.1 FastAPI サーバーのローカル実行
-
-コンテナ内部ではなく、ホスト側で API コード (`main.py`) を直接デバッグ・開発する場合の手順です。
-
-```bash
-# 仮想環境の構築と依存パッケージの同期
-uv sync
-
-# 環境変数の構成（検証時は一時的に認証を無効化するとスムーズです）
-export LIBRECHAT_CODE_API_KEY="dev-secret-key"
-export DISABLE_CODE_API_AUTH="true"
-export RCE_IMAGE_NAME="custom-rce-kernel:latest"
-
-# 開発用サーバーの起動（ホットリロード有効）
-uv run uvicorn main:app --reload --port 3080
-```
-
-### 6.2 Docker Compose でのフルスタック起動
-
-```bash
-# RCE カーネルのビルド
-docker build -f Dockerfile.rce -t custom-rce-kernel:latest .
-
-# API + Docker Socket Proxy の起動
-docker compose up -d
-```
-
----
-
-## 7. テスト駆動開発 (TDD) と CI
-
-本プロジェクトの堅牢性は、58ファイル・270以上の pytest 検証ケースによって保証されています。コード変更時は、必ずテストを実行してデグレーションがないか確認してください。
-
-### 7.1 テストの実行
-
-ホスト OS に Python 3.13+ および Docker 環境があることを確認し、テストを実行します。
-
-```bash
-# すべてのテストを一括で実行（CIと同様の実行）
-LIBRECHAT_CODE_API_KEY=test-secret-key uv run pytest tests/ -v
-```
-
-> **注意:** テスト実行時には、ダミーの API キーを指定する `LIBRECHAT_CODE_API_KEY` 環境変数を付与して実行してください。指定がない場合、FastAPI の起動処理でエラーとなりテストが開始されません。
-
-
-### 7.2 必須のテスト検証項目
-
-新規機能やエンドポイントの変更パッチをコミットする際は、以下のカテゴリに対するテストケースを `tests/` 内に追加することを推奨します:
-
-- **多言語実行テスト:** Python、Bash、R が想定通りに動作するか
-- **境界セキュリティ検証:** パストラバーサル（`../../` 等の悪意ある入力）によるホストファイルシステムへのアクセスが完全に遮断されているか
-- **高負荷セッション・フォールバック:** 多数のセッション（コンテナ）が並列で動いた際、スレッドセーフにファイルマッピングとクリーンアップが行われるか
-- **セッション ID 解決:** NanoID ↔ 内部 UUID のマッピングが正しく機能するか
-- **認証フォールバック:** `X-API-Key`, `Authorization: Bearer`, クエリパラメータの全パスが正しく動作するか
-
----
-
-## 8. セキュリティ設計
-
-### 8.1 Docker Socket Proxy
-
-本 API は、ホストの Docker ソケット（`/var/run/docker.sock`）に直接触れず、**制限付きプロキシサーバー** (`tecnativa/docker-socket-proxy`) を仲介させてコンテナの作成・実行権限のみを解放するアプローチをとっています。
-
-```yaml
-# docker-compose.yml での権限設定
-environment:
-  - CONTAINERS=1    # コンテナ操作: 許可
-  - EXEC=1          # コンテナ内実行: 許可
-  - POST=1          # POST リクエスト: 許可
-  - BUILD=0         # イメージビルド: 拒否
-  - IMAGES=0        # イメージ操作: 拒否
-  - NETWORKS=0      # ネットワーク操作: 拒否
-  - VOLUMES=0       # ボリューム操作: 拒否
-```
-
-開発段階でも、Docker ソケットの直接マウントによるセキュリティ侵害リスクに配慮した設計を維持してください。
-
-### 8.2 サンドボックスの隔離
-
-各コンテナには以下のセキュリティ制約が適用されます:
-
-- **非 root ユーザー** (`sandboxuser`, UID 1000) で実行
-- **メモリ・CPU 制限** による DoS 対策
-- **ネットワーク無効化**（デフォルト）による情報漏洩防止
-- **自動削除** (`remove=True`) によるコンテナ残留防止
-- **入力サニタイズ** (`sanitize_id()`) によるインジェクション防止
-
-### 8.3 セキュリティヘッダーとCORSの厳格化
-
-`SecurityHeadersCORSMiddleware` により、ダウンロード以外の全レスポンスに以下のヘッダーを付与します:
-
-- `X-Content-Type-Options: nosniff`
-- `X-Frame-Options: DENY`
-- `X-XSS-Protection: 1; mode=block`
-- `Strict-Transport-Security: max-age=31536000; includeSubDomains`
-- `Referrer-Policy: no-referrer`
-
-また、CORS（Cross-Origin Resource Sharing）設定は以下のように厳格化されています：
-- **ワイルドカード `'*'` の拒否**: セキュリティ向上のため、オリジン全体を許可するワイルドカード設定は受け入れず、明示的なホワイトリストでの運用を強制します。
-- **許可リストのバリデーション**: `CORS_ORIGIN_WHITELIST` で指定されたオリジン群は、末尾のスラッシュ `/` が自動的に除去され、正確に一致する場合のみ許可ヘッダーを出力します。
-
----
-
-## 9. 動作確認済み環境
-
-以下の構成でエンドツーエンドの動作検証を実施済みです。
-
-| コンポーネント | バージョン / イメージ | 確認日 |
-|---|---|---|
-| LibreChat | `ghcr.io/danny-avila/librechat:v0.8.6` | 2026-06-06 |
-| LibreChat RAG API | `ghcr.io/danny-avila/librechat-rag-api-dev-lite:latest` | 2026-06-06 |
-| Sandpack Bundler | `ghcr.io/librechat-ai/codesandbox-client/bundler:latest` | 2026-06-06 |
-| Code Interpreter API | `librechat_with_local_ci-code-interpreter-api` (本リポジトリ) | 2026-06-06 |
-| RCE カーネル | `custom-rce-kernel:latest` (Python 3.11-slim ベース) | 2026-06-06 |
-| Docker Socket Proxy | `tecnativa/docker-socket-proxy` | 2026-06-06 |
-| MeiliSearch | `getmeili/meilisearch:v1.7.3` | 2026-06-06 |
-| pgvector | `pgvector/pgvector:0.8.0-pg15-trixie` | 2026-06-06 |
-
-### 動作確認済みの主要機能
-
-- ✅ **Code Interpreter（Python コード実行）**: エージェントによる Python コードの実行、stdout/stderr の取得
-- ✅ **Artifacts 機能**: LibreChat v0.8.6 でのアーティファクト（HTML/TSX プレビュー）表示
-- ✅ **Sandpack Bundler（ローカル）**: SSL モード（`ssl-mode` プロファイル）での Caddy + Sandpack ローカルバンドラー動作
-- ✅ **セッションフォールバック**: `session_id: null` 送信時の自動セッション生成
-- ✅ **認証機能**: `X-API-Key` ヘッダー、`Authorization: Bearer` トークン、クエリパラメータの3方式すべて
-- ✅ **セキュリティヘッダーとCORS制限**: 全レスポンスへのセキュリティヘッダー付与、およびワイルドカード `'*'` の使用防止とホワイトリストによる厳格なCORS管理
-- ✅ **パストラバーサル防御**: `../../` 等の悪意ある入力のブロック
-- ✅ **並行容量制限レースコンディション防御**: `WeakrefRLock` と `pending_sessions` による最大セッション上限の制御
-- ✅ **ファイルマッピング最適化**: ファイル走査処理の $O(N)$ 高速化
-
-### 既知の警告（動作上の問題ではない）
-
-- **`RAG API is not reachable at undefined`**: LibreChat 起動時ログに出力されることがあるが、RAG API コンテナが同一ネットワーク内で起動していれば実運用上は問題なし。
-- **`Failed to fetch models from openAI API (401)`**: OpenAI API キーが本番キーでない場合（ダミーキー使用時）に定期的に出力される。Ollama や External API が正しく設定されていれば、他のモデルは正常に利用可能。
-- **`sandpack-bundler (unhealthy)`**: `ssl-mode` プロファイルで起動している場合のヘルスチェック設定に起因。HTTP ヘルスチェックが HTTPS リダイレクトで失敗するため。動作自体は問題なし。
-
-### LibreChat バージョンの更新手順
-
-LibreChat の新バージョンへ更新する際は、以下の手順を踏んでください。
-
-1. [docker-compose.librechat.yml](docker-compose.librechat.yml) の `librechat` サービスのイメージタグを更新する
-2. フルスタックを起動して手動動作確認を実施する
-3. pytest テストスイートを2段階で全件実行し、合格を確認する
-4. 本ドキュメントの「動作確認済み環境」表を更新する
-
----
-
-## 10. 開発上の共通注意・禁止事項
-
-### 10.1 ローカル絶対パス記述の禁止（重要）
-
-ドキュメント（Markdownや設計書）、テストコード、設定ファイルなどのリポジトリ内に、開発者個人のローカル環境依存の絶対パス（例: `/home/username/Project/LibreChat_with_local_CI/` や `/home/nobuhiko/.gemini/...`）を記述することは**厳禁**とします。
-
-* **理由**:
-  * 外部への個人ディレクトリ構成の漏洩（セキュリティ・プライバシーの懸念）を防ぐため
-  * 他の開発環境やCI/CDパイプライン環境へ移行した際のポータビリティ（リンク切れ、パスの不整合）を担保するため
-* **対策**:
-  * リポジトリ内ドキュメントリンクや画像パスには、常に相対パス（例: `./docs/...`）を使用してください。
-  * テストなどでダミーパスを用いる必要がある場合は、`/path/to/...` や `/tmp/...` などの抽象化されたプレースホルダー表記を用いてください。
