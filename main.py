@@ -10,6 +10,7 @@ import time
 import asyncio
 import string
 import secrets
+from unittest.mock import MagicMock
 from fastapi import FastAPI, HTTPException, Security, UploadFile, File, Form, Query, BackgroundTasks, Response, Request
 from contextlib import asynccontextmanager
 from fastapi.security import APIKeyHeader, HTTPBearer, HTTPAuthorizationCredentials
@@ -927,17 +928,10 @@ class CodeResponse(BaseModel):
     files: Optional[List[FileInfo]] = []
     images: List[Dict[str, Any]] = [] # Matplotlib images or other plot captures
 
-# 4. Endpoints
+# 4. Helper Functions
 
-@app.post("/exec", response_model=CodeResponse)
-@app.post("/run/exec", response_model=CodeResponse)
-async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
-    """
-    Executes code in a sandboxed Docker container.
-    """
-    logger.info("Exec request received. Request body: %s", req.model_dump())
-    
-    # Extract session_id from files array if root session_id is missing (LibreChat behavior)
+def _get_effective_session_id(req: CodeRequest) -> Optional[str]:
+    """Extracts session_id from CodeRequest with various fallbacks."""
     effective_session_id = req.session_id
     if not effective_session_id and req.files and len(req.files) > 0:
         # Pydantic parses this into FileInput objects, or it's a dict if extra fields are allowed
@@ -949,27 +943,36 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
         elif isinstance(first_file, dict):
             effective_session_id = first_file.get("session_id") or first_file.get("storage_session_id")
 
-    # Fallback to user_id to ensure container reuse and improve performance
-    if not effective_session_id and req.user_id:
-        effective_session_id = f"user_{req.user_id}"
-        
-    # 【重要フォールバック】直近5分以内にファイルのアップロード成功実績があり、
-    # かつ実行リクエストで session_id が渡されてこなかった場合（bash_tool等のヘッダーバグやセッション連携漏れ）
-    # 直前のアップロードセッションIDを自動で再利用し、同一コンテナ内にファイルを配置した状態で実行します。
-    if not effective_session_id:
-        global LAST_UPLOADED_SESSION_ID, LAST_UPLOAD_TIME
         if LAST_UPLOADED_SESSION_ID and (time.time() - LAST_UPLOAD_TIME < 300):
             effective_session_id = LAST_UPLOADED_SESSION_ID
             logger.info("Fallback activated! Re-using last uploaded session ID: %s", effective_session_id)
-        
-    logger.info("Effective session ID for exec: %s", effective_session_id)
 
-    # Validate execution language
+    return effective_session_id
+
+def _get_validated_lang(req: CodeRequest) -> str:
+    """Extracts and validates the execution language."""
     requested_lang = (req.lang or "python").lower()
     SUPPORTED_LANGUAGES = {"python", "py", "bash", "sh", "r"}
     if requested_lang not in SUPPORTED_LANGUAGES:
         logger.error("Unsupported language requested: %s", req.lang)
         raise HTTPException(status_code=400, detail=f"Unsupported language: {req.lang}. Supported: python, bash, r")
+    return requested_lang
+
+# 5. Endpoints
+
+@app.post("/exec", response_model=CodeResponse)
+@app.post("/run/exec", response_model=CodeResponse)
+async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
+    """
+    Executes code in a sandboxed Docker container.
+    """
+    logger.info("Exec request received. Request body: %s", req.model_dump())
+
+    effective_session_id = _get_effective_session_id(req)
+    logger.info("Effective session ID for exec: %s", effective_session_id)
+
+    # Validate execution language
+    requested_lang = _get_validated_lang(req)
 
     # Resolve nanoid session ID if provided
     sid = effective_session_id or generate_nanoid()
@@ -980,7 +983,7 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
         result = await kernel_manager.execute_code(
             real_session_id,
             req.code,
-            lang=(req.lang or "python").lower(),
+            lang=requested_lang,
             external_session_id=nanoid_session
         )
     else:
@@ -988,7 +991,7 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
             kernel_manager.execute_code,
             real_session_id,
             req.code,
-            lang=(req.lang or "python").lower(),
+            lang=requested_lang,
             external_session_id=nanoid_session
         )
 
@@ -1004,6 +1007,22 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
     for f in current_files:
         mime_type, _ = mimetypes.guess_type(f)
         nanoid_file = filename_to_id[f]
+        real_session_id,
+        req.code,
+        lang=requested_lang,
+        external_session_id=nanoid_session
+    )
+    # List generated files and format them for LibreChat native ingestion
+    current_files = await asyncio.to_thread(kernel_manager.list_files, real_session_id, external_session_id=nanoid_session)
+    
+    # Ensure all current_files have a nanoid mapping
+    mapping = _map_filenames_to_nanoids(nanoid_session, current_files)
+
+    structured_files = []
+    for f in current_files:
+        mime_type, _ = mimetypes.guess_type(f)
+        nanoid_file = mapping[f]
+>>>>>>> origin/refactor-run-code-modular-helpers-10839878437343372735
 
         structured_files.append({
             "id": nanoid_file,
