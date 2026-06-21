@@ -87,19 +87,16 @@ LibreChat側の `.env` で `LIBRECHAT_CODE_BASEURL` と `LIBRECHAT_CODE_API_KEY`
 
 ## 開発とテスト
 
-本プロジェクトはテスト駆動開発 (TDD) に基づいて構築されており、26ファイル189件以上のテストスイートを備えています。
+本プロジェクトはテスト駆動開発 (TDD) に基づいて構築されており、58ファイル276件以上のテストスイートを備えています。
 
-テストは **2段階** で実行してください:
+テストは以下のコマンドで一括実行してください。
 
 ```bash
-# ステップ1: 認証テスト（APIキーを有効にした状態で実行）
-LIBRECHAT_CODE_API_KEY=test-dev-key uv run pytest tests/test_auth_unit.py tests/test_api.py -v
-
-# ステップ2: その他全テスト（認証を無効にした状態で実行）
-LIBRECHAT_CODE_API_KEY=test-dev-key DISABLE_CODE_API_AUTH=true uv run pytest tests/ --ignore=tests/test_auth_unit.py -v
+# すべてのテストを一括で実行
+LIBRECHAT_CODE_API_KEY=test-secret-key uv run pytest tests/ -v
 ```
 
-> **注意**: `DISABLE_CODE_API_AUTH=true` を設定したまま認証テストを実行すると、401 が期待される箇所で 200 が返るため意図的に失敗します。
+> **注意**: テスト実行時には、ダミーの API キーを指定する `LIBRECHAT_CODE_API_KEY` 環境変数を付与して実行してください。指定がない場合、FastAPI の起動処理でエラーとなりテストが開始されません。
 
 テスト範囲:
 - API認証およびエンドポイントの整合性

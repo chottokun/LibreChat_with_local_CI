@@ -32,7 +32,7 @@
 | パッケージ管理 | uv (`pyproject.toml`) |
 | コンテナ管理 | Docker Engine + Docker Socket Proxy |
 | サンドボックス | `custom-rce-kernel:latest` (Python 3.11-slim ベース) |
-| テスト | pytest (26ファイル、189以上の検証ケース) |
+| テスト | pytest (58ファイル、270以上の検証ケース) |
 | セキュリティ | 非root実行、リソース制限、Docker Socket Proxy による権限分離 |
 | 動作確認済み LibreChat | `ghcr.io/danny-avila/librechat:v0.8.6` (2026-06-01 リリース) |
 
@@ -296,23 +296,19 @@ docker compose up -d
 
 ## 7. テスト駆動開発 (TDD) と CI
 
-本プロジェクトの堅牢性は、26ファイル・164以上の pytest 検証ケースによって保証されています。コード変更時は、必ずテストを実行してデグレーションがないか確認してください。
+本プロジェクトの堅牢性は、58ファイル・270以上の pytest 検証ケースによって保証されています。コード変更時は、必ずテストを実行してデグレーションがないか確認してください。
 
 ### 7.1 テストの実行
 
 ホスト OS に Python 3.13+ および Docker 環境があることを確認し、テストを実行します。
 
-テストは **2段階** で実行する必要があります。認証機能をテストするケースと、認証を無効化した状態でその他機能をテストするケースで設定が異なるためです。
-
 ```bash
-# ステップ1: 認証が必要なテスト（APIキーを有効にした状態で実行）
-LIBRECHAT_CODE_API_KEY=test-dev-key uv run pytest tests/test_auth_unit.py tests/test_api.py -v
-
-# ステップ2: その他すべてのテスト（認証を無効にした状態で実行）
-LIBRECHAT_CODE_API_KEY=test-dev-key DISABLE_CODE_API_AUTH=true uv run pytest tests/ --ignore=tests/test_auth_unit.py -v
+# すべてのテストを一括で実行（CIと同様の実行）
+LIBRECHAT_CODE_API_KEY=test-secret-key uv run pytest tests/ -v
 ```
 
-> **注意:** 両ステップすべてが合格することを確認してください。`DISABLE_CODE_API_AUTH=true` を設定したまま認証テストを実行すると、401 が期待される箇所で 200 が返るため、意図的に失敗します。
+> **注意:** テスト実行時には、ダミーの API キーを指定する `LIBRECHAT_CODE_API_KEY` 環境変数を付与して実行してください。指定がない場合、FastAPI の起動処理でエラーとなりテストが開始されません。
+
 
 ### 7.2 必須のテスト検証項目
 
