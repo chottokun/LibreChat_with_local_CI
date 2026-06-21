@@ -1,7 +1,7 @@
 import pytest
 import os
 from fastapi.testclient import TestClient
-from main import app, kernel_manager
+from main import app, kernel_manager, API_KEY
 
 client = TestClient(app)
 
@@ -9,7 +9,7 @@ def test_download_with_empty_sanitized_session_id():
     # ID consisting only of characters that get sanitized away
     session_id = "@@@"
     filename = "test.txt"
-    headers = {"X-API-Key": "test-key"}
+    headers = {"X-API-Key": API_KEY}
 
     response = client.get(f"/download/{session_id}/{filename}", headers=headers)
     assert response.status_code == 400
@@ -40,7 +40,7 @@ def test_download_path_traversal_with_volume_mounting(tmp_path):
             # session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, real_session_id)
             kernel_manager.nanoid_to_session["attacker"] = "../.."
 
-        headers = {"X-API-Key": "test-key"}
+        headers = {"X-API-Key": API_KEY}
         # Try to download something that would resolve to outside_file if traversal worked
         # filepath = /tmp/pytest-of-jules/pytest-XXX/sessions/../../outside.txt
         response = client.get("/download/attacker/outside.txt", headers=headers)
