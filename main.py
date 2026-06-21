@@ -910,13 +910,26 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
         real_session_id, nanoid_session = kernel_manager.get_or_create_session_mapping(sid)
     
     # Run in sandbox
-    result = await asyncio.to_thread(
-        kernel_manager.execute_code,
-        real_session_id,
-        req.code,
-        lang=(req.lang or "python").lower(),
-        external_session_id=nanoid_session
-    )
+    if asyncio.iscoroutinefunction(kernel_manager.execute_code):
+        result = await kernel_manager.execute_code(
+            real_session_id,
+            req.code,
+            lang=(req.lang or "python").lower(),
+            external_session_id=nanoid_session
+        )
+    else:
+        result = await asyncio.to_thread(
+            kernel_manager.execute_code,
+            real_session_id,
+            req.code,
+            lang=(req.lang or "python").lower(),
+            external_session_id=nanoid_session
+        )
+
+    # Handle cases where execute_code is mocked with an async side_effect but not as a coroutine function
+    # or when to_thread returns a coroutine from a mock.
+    if asyncio.iscoroutine(result):
+        result = await result
     # List generated files and format them for LibreChat native ingestion
     current_files = await asyncio.to_thread(kernel_manager.list_files, real_session_id, external_session_id=nanoid_session)
     structured_files = []
