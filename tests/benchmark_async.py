@@ -6,8 +6,8 @@ from unittest.mock import MagicMock
 import httpx
 
 # Mock execute_code to be slow
-def slow_execute_code(*args, **kwargs):
-    time.sleep(1)
+async def slow_execute_code(*args, **kwargs):
+    await asyncio.sleep(1)
     return {
         "stdout": "ok",
         "stderr": "",

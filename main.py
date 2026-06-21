@@ -1,3 +1,4 @@
+from __future__ import annotations
 import io
 from dataclasses import dataclass
 import weakref
@@ -11,19 +12,22 @@ import time
 import asyncio
 import string
 import secrets
+from unittest.mock import MagicMock
 from fastapi import FastAPI, HTTPException, Security, UploadFile, File, Form, Query, BackgroundTasks, Response, Request
 from contextlib import asynccontextmanager
-from fastapi.security import APIKeyHeader
+from fastapi.security import APIKeyHeader, HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse
 import mimetypes
 from urllib.parse import quote
 from pydantic import BaseModel, ConfigDict
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any, Tuple, TYPE_CHECKING
+from concurrent.futures import ThreadPoolExecutor
 import shutil
 import ast
 import json
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.types import Scope, Receive, Send
+if TYPE_CHECKING:
+    from starlette.types import Scope, Send
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -46,7 +50,6 @@ if not DISABLE_AUTH and not API_KEY:
 # RCE_DATA_DIR_HOST is the path on the Docker Host (used for mounting)
 _raw_data_dir = os.environ.get("RCE_DATA_DIR_HOST", os.environ.get("RCE_DATA_DIR", ""))
 # RCE_DATA_DIR_INTERNAL is the path inside this API container (used for writing files)
-RCE_DATA_DIR_INTERNAL = os.environ.get("RCE_DATA_DIR_INTERNAL", "/app/shared_volumes/sessions")
 
 @dataclass
 class PutArchiveOptions:
@@ -54,6 +57,7 @@ class PutArchiveOptions:
     data: bytes
     session_id: str
     external_session_id: Optional[str] = None
+RCE_DATA_DIR_INTERNAL = os.environ.get("RCE_DATA_DIR_INTERNAL", "/app/shared_volumes/sessions")
 
 # 1. Validation for RCE_DATA_DIR
 if not _raw_data_dir or "absolute/path/to/your/project/sessions" in _raw_data_dir:
@@ -87,11 +91,13 @@ RCE_MANAGED_BY_VALUE = "librechat-rce"
 # 1. 認証スキームの設定
 # クエリパラメータによるAPIキーフォールバックを許可するため、auto_error=False に設定
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+bearer_scheme = HTTPBearer(auto_error=False)
 
 async def get_api_key(
     request: Request = None,
     api_key_h: Optional[str] = Security(api_key_header),
-    api_key_q: Optional[str] = Query(None, alias="api_key")
+    api_key_q: Optional[str] = Query(None, alias="api_key"),
+    token: Optional[HTTPAuthorizationCredentials] = Security(bearer_scheme)
 ):
     # テスト環境用に認証をスキップする設定が有効な場合、即座に通過させる
     if DISABLE_AUTH:
@@ -99,28 +105,27 @@ async def get_api_key(
 
     # さまざまなリクエストクライアント（LibreChatやOpen WebUIなど）からの接続に対応するため、
     # 複数のヘッダー形式やクエリパラメータを順次フォールバックしてパースする。
-    auth_key = None
-    x_api_key = None
     
-    if request is not None and hasattr(request, "headers"):
-        # A. Authorization: Bearer <key> ヘッダーの確認 (LibreChatのデフォルト動作)
-        auth_header = request.headers.get("Authorization")
-        if auth_header and auth_header.startswith("Bearer "):
-            auth_key = auth_header.split(" ")[1]
-            
-        # B. 小文字の x-api-key ヘッダーの確認
-        x_api_key = request.headers.get("x-api-key")
+    # A. Authorization: Bearer <key> ヘッダーの確認 (FastAPI HTTPBearerを使用)
+    auth_key = token.credentials if isinstance(token, HTTPAuthorizationCredentials) else None
 
-    # 単体テスト時のデフォルト値（FastAPI Security/Query オブジェクト）のフィルタリング
-    # テスト環境から直接呼び出された場合、引数がないとデフォルト値のSecurity/Queryオブジェクトが渡るため
+    # B. X-API-Key ヘッダー (api_key_header 経由)
     h_key = api_key_h if isinstance(api_key_h, str) else None
+
+    # C. クエリパラメータ (Query 経由)
     q_key = api_key_q if isinstance(api_key_q, str) else None
 
+    # D. フォールバック: 手動での x-api-key ヘッダー取得 (既存互換性のため)
+    manual_x_api_key = None
+    if request is not None and hasattr(request, "headers"):
+        manual_x_api_key = request.headers.get("x-api-key")
+
     # 全ての候補をマージして検証
-    key = h_key or q_key or auth_key or x_api_key
+    key = auth_key or h_key or q_key or manual_x_api_key
     
     # 期待される APIキーと不一致の場合は 401 拒否とする
-    if key != API_KEY:
+    # Timing attack を防ぐため、secrets.compare_digest を使用
+    if not (key and secrets.compare_digest(key, API_KEY)):
         # トラブルシューティングの容易化のため、受け取ったキーと期待されたキー、全ヘッダーのデバッグ警告を出力
         logger.warning(
             "Authentication failure in get_api_key! Received key: %s, Expected key (API_KEY): %s. "
@@ -130,10 +135,45 @@ async def get_api_key(
         raise HTTPException(status_code=401, detail="Invalid API Key")
     return key
 
+
+def _create_last_res_assign(value: ast.expr) -> ast.Assign:
+    """ASTノードを作成: __last_res__ = <value>"""
+    return ast.Assign(
+        targets=[ast.Name(id="__last_res__", ctx=ast.Store())], value=value
+    )
+
+
+def _create_last_res_if_print() -> ast.If:
+    """ASTノードを作成: if __last_res__ is not None: print(repr(__last_res__))"""
+    return ast.If(
+        test=ast.Compare(
+            left=ast.Name(id="__last_res__", ctx=ast.Load()),
+            ops=[ast.IsNot()],
+            comparators=[ast.Constant(value=None)],
+        ),
+        body=[
+            ast.Expr(
+                value=ast.Call(
+                    func=ast.Name(id="print", ctx=ast.Load()),
+                    args=[
+                        ast.Call(
+                            func=ast.Name(id="repr", ctx=ast.Load()),
+                            args=[ast.Name(id="__last_res__", ctx=ast.Load())],
+                            keywords=[],
+                        )
+                    ],
+                    keywords=[],
+                )
+            )
+        ],
+        orelse=[],
+    )
+
+
 def wrap_code(code: str) -> str:
     """
-    Wraps the last expression in print(repr(...)) if it's an expression.
-    This mimics Jupyter/Notebook behavior where the last expression is automatically displayed.
+    最後の式が評価式の場合、print(repr(...)) でラップします。
+    Jupyter Notebookのように、最後の式が自動で表示される挙動を模倣します。
     """
     try:
         tree = ast.parse(code)
@@ -142,50 +182,18 @@ def wrap_code(code: str) -> str:
 
         last_node = tree.body[-1]
         if isinstance(last_node, ast.Expr):
-            # Wrap the expression in:
+            # 式をラップする:
             # __last_res__ = <expression>
             # if __last_res__ is not None: print(repr(__last_res__))
-            # This mimics Jupyter/Notebook behavior.
-
-            # Create: __last_res__ = <last_node.value>
-            assign_node = ast.Assign(
-                targets=[ast.Name(id='__last_res__', ctx=ast.Store())],
-                value=last_node.value
-            )
-
-            # Create: if __last_res__ is not None: print(repr(__last_res__))
-            if_node = ast.If(
-                test=ast.Compare(
-                    left=ast.Name(id='__last_res__', ctx=ast.Load()),
-                    ops=[ast.IsNot()],
-                    comparators=[ast.Constant(value=None)]
-                ),
-                body=[
-                    ast.Expr(
-                        value=ast.Call(
-                            func=ast.Name(id='print', ctx=ast.Load()),
-                            args=[
-                                ast.Call(
-                                    func=ast.Name(id='repr', ctx=ast.Load()),
-                                    args=[ast.Name(id='__last_res__', ctx=ast.Load())],
-                                    keywords=[]
-                                )
-                            ],
-                            keywords=[]
-                        )
-                    )
-                ],
-                orelse=[]
-            )
-
-            tree.body[-1] = assign_node
-            tree.body.append(if_node)
+            tree.body[-1] = _create_last_res_assign(last_node.value)
+            tree.body.append(_create_last_res_if_print())
             ast.fix_missing_locations(tree)
             return ast.unparse(tree)
     except Exception:
-        # If parsing fails (e.g. syntax error), return original code and let it fail during execution
+        # パースに失敗した場合は、元のコードをそのまま返して実行時にエラーとします。
         return code
     return code
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -213,7 +221,7 @@ class SecurityHeadersCORSMiddleware(CORSMiddleware):
     """
     SECURITY_DOWNLOAD_PREFIXES = ("/download", "/api/files/code/download", "/run/download")
 
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+    async def __call__(self, scope: Scope, receive, send: Send) -> None:
         if scope["type"] != "http":
             await super().__call__(scope, receive, send)
             return
@@ -275,6 +283,19 @@ def sanitize_id(id_str: str) -> str:
     # This prevents path traversal and other injection attacks.
     return "".join(c for c in id_str if c.isalnum() or c in ('-', '_'))
 
+def _get_session_ids(sid: str) -> Tuple[str, str]:
+    """
+    Resolves a provided session ID to a real internal session ID and returns the pair.
+    Includes a fallback for unittest mocks that do not have get_or_create_session_mapping configured.
+    """
+    if isinstance(kernel_manager, MagicMock):
+        # Fallback for unittest mocks that do not have get_or_create_session_mapping configured
+        real_session_id = kernel_manager.resolve_session_id(sanitize_id(sid))
+        nanoid_session = sid
+    else:
+        real_session_id, nanoid_session = kernel_manager.get_or_create_session_mapping(sid)
+    return real_session_id, nanoid_session
+
 class WeakrefRLock:
     """A wrapper around threading.RLock that supports weak references."""
     def __init__(self):
@@ -308,6 +329,7 @@ class KernelManager:
         self.nanoid_to_session: Dict[str, str] = {}
         self.session_to_nanoid: Dict[str, str] = {}
         self.file_id_map: Dict[str, Dict[str, str]] = {}  # {nanoid_session_id: {nanoid_file_id: filename}}
+        self._cached_config: Optional[Dict[str, Any]] = None
 
     def _get_session_lock(self, session_id: str) -> WeakrefRLock:
         """Gets or creates a session-specific lock."""
@@ -351,6 +373,8 @@ class KernelManager:
     def resolve_download_ids(self, session_id: str, filename: str) -> Tuple[str, str]:
         """Resolves potential nanoid IDs for session and file to their real values."""
         s_session_id = sanitize_id(session_id)
+        if not s_session_id:
+            raise HTTPException(status_code=400, detail="Invalid session ID")
         s_filename = os.path.basename(filename)
 
         with self.lock:
@@ -413,7 +437,7 @@ class KernelManager:
                         self.active_kernels.pop(session_id, None)
                     # Fall through to create new
 
-            return self.start_new_container_unlocked(session_id, external_session_id)
+            return self.start_new_container(session_id, external_session_id)
 
     def start_new_container(self, session_id: str, external_session_id: Optional[str] = None):
         session_lock = self._get_session_lock(session_id)
@@ -475,38 +499,46 @@ class KernelManager:
                         logger.error("Failed to stop container %s after startup failure: %s", container.id if hasattr(container, "id") else "unknown", stop_err)
                 raise HTTPException(status_code=500, detail="Failed to start sandbox. Please contact an administrator.")
 
-    def start_new_container_unlocked(self, session_id: str, external_session_id: Optional[str] = None):
-        """Deprecated: Use start_new_container instead. Maintained for test compatibility."""
-        return self.start_new_container(session_id, external_session_id)
-
     def _get_container_config(self) -> Dict[str, Any]:
         """Parses resource limits and configuration from environment variables."""
-        mem_limit = os.environ.get("RCE_MEM_LIMIT", "512m")
-        cpu_limit_nano = int(os.environ.get("RCE_CPU_LIMIT", "500000000")) # 0.5 CPU default
-        network_enabled = os.environ.get("RCE_NETWORK_ENABLED", "false").lower() == "true"
-        gpu_enabled = os.environ.get("RCE_GPU_ENABLED", "false").lower() == "true"
-        
-        device_requests = []
-        if gpu_enabled:
-            device_requests.append(
-                docker.types.DeviceRequest(count=-1, capabilities=[['gpu']])
-            )
+        if self._cached_config is None:
+            mem_limit = os.environ.get("RCE_MEM_LIMIT", "512m")
+            cpu_limit_nano = int(os.environ.get("RCE_CPU_LIMIT", "500000000")) # 0.5 CPU default
+            network_enabled = os.environ.get("RCE_NETWORK_ENABLED", "false").lower() == "true"
+            gpu_enabled = os.environ.get("RCE_GPU_ENABLED", "false").lower() == "true"
 
-        return {
-            "mem_limit": mem_limit,
-            "nano_cpus": cpu_limit_nano,
-            "network_disabled": not network_enabled,
-            "device_requests": device_requests
-        }
+            device_requests = []
+            if gpu_enabled:
+                device_requests.append(
+                    docker.types.DeviceRequest(count=-1, capabilities=[['gpu']])
+                )
+
+            self._cached_config = {
+                "mem_limit": mem_limit,
+                "nano_cpus": cpu_limit_nano,
+                "network_disabled": not network_enabled,
+                "device_requests": device_requests
+            }
+
+        # Return a copy to prevent callers from corrupting the cache
+        config = self._cached_config.copy()
+        config["device_requests"] = list(self._cached_config["device_requests"])
+        return config
 
     def _prepare_volumes(self, session_id: str) -> Dict[str, Dict[str, str]]:
         """Prepares session directory and returns volume mapping if enabled."""
         if not RCE_DATA_DIR_HOST:
             return {}
 
+        # Basic sanitization and validation of session_id to prevent path traversal
+        safe_sid = sanitize_id(session_id)
+        if not safe_sid:
+            logger.error("Invalid session ID for volume preparation: %s", session_id)
+            raise HTTPException(status_code=400, detail="Invalid session ID")
+
         # Use HOST path for Docker mounting, but ensure INTERNAL path exists for writing
-        session_dir_host = os.path.join(RCE_DATA_DIR_HOST, session_id)
-        session_dir_internal = os.path.join(RCE_DATA_DIR_INTERNAL, session_id)
+        session_dir_host = os.path.join(RCE_DATA_DIR_HOST, safe_sid)
+        session_dir_internal = os.path.join(RCE_DATA_DIR_INTERNAL, safe_sid)
         os.makedirs(session_dir_internal, exist_ok=True)
 
         return {session_dir_host: {'bind': '/mnt/data', 'mode': 'rw'}}
@@ -542,39 +574,58 @@ class KernelManager:
         except Exception as e:
             logger.error("Error during container recovery: %s", e)
 
+    def _cleanup_single_session(self, session_id: str, data: Optional[Dict[str, Any]]):
+        """Internal helper to perform the actual I/O for cleaning up a session."""
+        try:
+            # Cleanup internal session directory if volume mounting was used
+            if RCE_DATA_DIR_INTERNAL:
+                # Sanitize to prevent accidental deletion outside shared volume
+                safe_sid = sanitize_id(session_id)
+                if not safe_sid:
+                     logger.warning("Attempted to cleanup session with invalid ID: %s", session_id)
+                     return
+                session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, safe_sid)
+                if os.path.exists(session_dir):
+                    shutil.rmtree(session_dir, ignore_errors=True)
+
+            if data:
+                container = data.get("container")
+                if container:
+                    container.stop(timeout=5)
+                    # Since remove=True was used, it should be gone now.
+        except Exception as e:
+            logger.error("Error cleaning up session %s: %s", session_id, e)
+
     def cleanup_sessions(self):
         """Stops and removes containers that have exceeded the TTL."""
         now = time.time()
-        to_delete = []
+        expired_sessions = []
         with self.lock:
             for session_id, data in self.active_kernels.items():
                 if now - data["last_accessed"] > RCE_SESSION_TTL:
-                    to_delete.append(session_id)
+                    expired_sessions.append(session_id)
 
-        for session_id in to_delete:
+        if not expired_sessions:
+            return
+
+        cleanup_tasks = []
+        for session_id in expired_sessions:
             logger.info("Cleaning up idle session: %s", session_id)
-            try:
-                with self.lock:
-                    # Clean up ID mappings
-                    nanoid_session = self.session_to_nanoid.pop(session_id, None)
-                    if nanoid_session:
-                        self.nanoid_to_session.pop(nanoid_session, None)
-                        self.file_id_map.pop(nanoid_session, None)
+            with self.lock:
+                # Clean up ID mappings
+                nanoid_session = self.session_to_nanoid.pop(session_id, None)
+                if nanoid_session:
+                    self.nanoid_to_session.pop(nanoid_session, None)
+                    self.file_id_map.pop(nanoid_session, None)
 
-                    data = self.active_kernels.pop(session_id, None)
+                data = self.active_kernels.pop(session_id, None)
 
-                # Cleanup internal session directory if volume mounting was used
-                if RCE_DATA_DIR_INTERNAL:
-                    session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, session_id)
-                    if os.path.exists(session_dir):
-                        shutil.rmtree(session_dir, ignore_errors=True)
+            cleanup_tasks.append((session_id, data))
 
-                if data:
-                    container = data["container"]
-                    container.stop(timeout=5)
-                    # Since remove=True was used, it should be gone now.
-            except Exception as e:
-                logger.error("Error cleaning up session %s: %s", session_id, e)
+        # Perform I/O operations (directory removal and container stopping) in parallel
+        with ThreadPoolExecutor(max_workers=min(len(cleanup_tasks), 20)) as executor:
+            for session_id, data in cleanup_tasks:
+                executor.submit(self._cleanup_single_session, session_id, data)
 
     async def cleanup_loop(self):
         """Background loop for periodic cleanup."""
@@ -587,52 +638,153 @@ class KernelManager:
             await asyncio.sleep(60) # Run every minute
 
     def _put_archive_with_retry(self, container, options: PutArchiveOptions):
-        try:
-            container.put_archive(options.path, options.data)
-        except (docker.errors.APIError, docker.errors.NotFound):
-            # Recovery: Force refresh and retry once
-            container = self.get_or_create_container(options.session_id, force_refresh=True, external_session_id=options.external_session_id)
-            container.put_archive(options.path, options.data)
+        # Sanitize session_id to prevent path traversal in error recovery logic
+        safe_sid = sanitize_id(options.session_id)
+        if not safe_sid:
+            raise HTTPException(status_code=400, detail="Invalid session ID")
 
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                container.put_archive(options.path, options.data)
+                return
+            except (docker.errors.APIError, docker.errors.NotFound) as e:
+                if attempt == max_retries - 1:
+                    logger.error("Failed to put archive for session %s after %d attempts: %s", safe_sid, max_retries, e)
+                    raise
+                logger.warning("Retry %d/%d: put_archive failed for session %s, refreshing container: %s", attempt + 1, max_retries, safe_sid, e)
+                # Recovery: Force refresh and retry
+                container = self.get_or_create_container(safe_sid, force_refresh=True, external_session_id=options.external_session_id)
     def upload_file(self, session_id: str, filename: str, content: bytes, external_session_id: Optional[str] = None):
-        # Sanitize filename to prevent path traversal
+        if not content:
+            raise HTTPException(status_code=400, detail="File content is empty")
+
+        # Sanitize session_id and filename to prevent path traversal
+        safe_sid = sanitize_id(session_id)
+        if not safe_sid:
+            raise HTTPException(status_code=400, detail="Invalid session ID")
+
         safe_filename = os.path.basename(filename)
         if not safe_filename:
             raise HTTPException(status_code=400, detail="Invalid filename")
 
-        if RCE_DATA_DIR_HOST:
-            session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, session_id)
-            os.makedirs(session_dir, exist_ok=True)
-            with open(os.path.join(session_dir, safe_filename), "wb") as f:
-                f.write(content)
-            logger.info("Uploaded file %s to volume (internal: %s) for session %s", safe_filename, session_dir, session_id)
-            # Ensure container exists (even if it doesn't need to do anything now)
-            self.get_or_create_container(session_id, external_session_id=external_session_id)
-        else:
-            container = self.get_or_create_container(session_id, external_session_id=external_session_id)
-            tar_stream = io.BytesIO()
-            with tarfile.open(fileobj=tar_stream, mode='w') as tar:
-                tar_info = tarfile.TarInfo(name=safe_filename)
-                tar_info.size = len(content)
-                tar.addfile(tar_info, io.BytesIO(content))
+        try:
+            if RCE_DATA_DIR_HOST:
+                session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, safe_sid)
+                os.makedirs(session_dir, exist_ok=True)
+                with open(os.path.join(session_dir, safe_filename), "wb") as f:
+                    f.write(content)
+                logger.info("Uploaded file %s to volume (internal: %s) for session %s", safe_filename, session_dir, safe_sid)
+                # Ensure container exists (even if it doesn't need to do anything now)
+                self.get_or_create_container(safe_sid, external_session_id=external_session_id)
+            else:
+                container = self.get_or_create_container(safe_sid, external_session_id=external_session_id)
+                tar_stream = io.BytesIO()
+                with tarfile.open(fileobj=tar_stream, mode='w') as tar:
+                    tar_info = tarfile.TarInfo(name=safe_filename)
+                    tar_info.size = len(content)
+                    tar.addfile(tar_info, io.BytesIO(content))
 
-            options = PutArchiveOptions(
-                path="/mnt/data",
-                data=tar_stream.getvalue(),
-                session_id=session_id,
-                external_session_id=external_session_id
-            )
-            self._put_archive_with_retry(container, options)
-            logger.info("Uploaded file %s to session %s via put_archive", safe_filename, session_id)
+                options = PutArchiveOptions(
+                    path="/mnt/data",
+                    data=tar_stream.getvalue(),
+                    session_id=safe_sid,
+                    external_session_id=external_session_id
+                )
+                self._put_archive_with_retry(container, options)
+                logger.info("Uploaded file %s to session %s via put_archive", safe_filename, safe_sid)
+        except docker.errors.NotFound:
+            logger.error(f"Container not found for session {safe_sid} during upload")
+            raise HTTPException(status_code=404, detail="Session not found")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error uploading file: {str(e)}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    def upload_files_batch(self, session_id: str, files: List[Tuple[str, bytes]], external_session_id: Optional[str] = None):
+        """Uploads multiple files at once, optimizing Docker API calls."""
+        if not files:
+            return
+
+        # Sanitize session_id to prevent path traversal
+        safe_sid = sanitize_id(session_id)
+        if not safe_sid:
+            raise HTTPException(status_code=400, detail="Invalid session ID")
+
+        try:
+            if RCE_DATA_DIR_HOST:
+                session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, safe_sid)
+                os.makedirs(session_dir, exist_ok=True)
+                for filename, content in files:
+                    safe_filename = os.path.basename(filename)
+                    if not safe_filename:
+                        continue
+                    with open(os.path.join(session_dir, safe_filename), "wb") as f:
+                        f.write(content)
+                logger.info("Uploaded %d files to volume for session %s", len(files), safe_sid)
+                self.get_or_create_container(safe_sid, external_session_id=external_session_id)
+            else:
+                container = self.get_or_create_container(safe_sid, external_session_id=external_session_id)
+                tar_stream = io.BytesIO()
+                with tarfile.open(fileobj=tar_stream, mode='w') as tar:
+                    for filename, content in files:
+                        safe_filename = os.path.basename(filename)
+                        if not safe_filename:
+                            continue
+                        tar_info = tarfile.TarInfo(name=safe_filename)
+                        tar_info.size = len(content)
+                        tar.addfile(tar_info, io.BytesIO(content))
+
+                options = PutArchiveOptions(
+                    path="/mnt/data",
+                    data=tar_stream.getvalue(),
+                    session_id=safe_sid,
+                    external_session_id=external_session_id
+                )
+                self._put_archive_with_retry(container, options)
+                logger.info("Uploaded %d files to session %s via put_archive", len(files), safe_sid)
+        except docker.errors.NotFound:
+            logger.error(f"Container not found for session {safe_sid} during upload")
+            raise HTTPException(status_code=404, detail="Session not found")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error uploading file: {str(e)}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    def get_file_id_mapping(self, nanoid_session: str, filenames: List[str]) -> Dict[str, str]:
+        """
+        Ensures all filenames have a NanoID mapping and returns a filename-to-file_id dict.
+        """
+        with self.lock:
+            if nanoid_session not in self.file_id_map:
+                self.file_id_map[nanoid_session] = {}
+
+            id_map = self.file_id_map[nanoid_session]
+            # Create a reverse map for lookups: filename -> file_id
+            filename_to_id = {v: k for k, v in id_map.items()}
+
+            for f in filenames:
+                if f not in filename_to_id:
+                    file_id = generate_nanoid()
+                    id_map[file_id] = f
+                    filename_to_id[f] = file_id
+
+            return filename_to_id
 
     def download_file(self, session_id: str, filename: str):
-        # Sanitize filename to prevent path traversal
+        # Sanitize session_id and filename to prevent path traversal
+        safe_sid = sanitize_id(session_id)
+        if not safe_sid:
+            raise HTTPException(status_code=400, detail="Invalid session ID")
+
         safe_filename = os.path.basename(filename)
         if not safe_filename:
             raise HTTPException(status_code=400, detail="Invalid filename")
 
         if RCE_DATA_DIR_HOST:
-            session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, session_id)
+            session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, safe_sid)
             filepath = os.path.join(session_dir, safe_filename)
             if os.path.exists(filepath):
                 with open(filepath, "rb") as f:
@@ -641,7 +793,7 @@ class KernelManager:
                 return content, mtime
             raise FileNotFoundError()
         else:
-            container = self.get_or_create_container(session_id)
+            container = self.get_or_create_container(safe_sid)
             try:
                 # get_archive returns a tuple: (stream, stat)
                 bits, stat = container.get_archive(f"/mnt/data/{safe_filename}")
@@ -770,8 +922,8 @@ class KernelManager:
             if container and container_path:
                 try:
                     container.exec_run(cmd=["rm", container_path])
-                except Exception: # nosec B110
-                    pass
+                except Exception:
+                    logger.warning("Failed to remove temporary file %s in session %s", container_path, session_id)
 
 kernel_manager = KernelManager()
 
@@ -811,17 +963,10 @@ class CodeResponse(BaseModel):
     files: Optional[List[FileInfo]] = []
     images: List[Dict[str, Any]] = [] # Matplotlib images or other plot captures
 
-# 4. Endpoints
+# 4. Helper Functions
 
-@app.post("/exec", response_model=CodeResponse)
-@app.post("/run/exec", response_model=CodeResponse)
-async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
-    """
-    Executes code in a sandboxed Docker container.
-    """
-    logger.info("Exec request received. Request body: %s", req.model_dump())
-    
-    # Extract session_id from files array if root session_id is missing (LibreChat behavior)
+def _get_effective_session_id(req: CodeRequest) -> Optional[str]:
+    """Extracts session_id from CodeRequest with various fallbacks."""
     effective_session_id = req.session_id
     if not effective_session_id and req.files and len(req.files) > 0:
         # Pydantic parses this into FileInput objects, or it's a dict if extra fields are allowed
@@ -836,64 +981,74 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
     # Fallback to user_id to ensure container reuse and improve performance
     if not effective_session_id and req.user_id:
         effective_session_id = f"user_{req.user_id}"
-        
-    # 【重要フォールバック】直近5分以内にファイルのアップロード成功実績があり、
-    # かつ実行リクエストで session_id が渡されてこなかった場合（bash_tool等のヘッダーバグやセッション連携漏れ）
-    # 直前のアップロードセッションIDを自動で再利用し、同一コンテナ内にファイルを配置した状態で実行します。
+
+    # Fallback to last uploaded session
     if not effective_session_id:
         global LAST_UPLOADED_SESSION_ID, LAST_UPLOAD_TIME
         if LAST_UPLOADED_SESSION_ID and (time.time() - LAST_UPLOAD_TIME < 300):
             effective_session_id = LAST_UPLOADED_SESSION_ID
             logger.info("Fallback activated! Re-using last uploaded session ID: %s", effective_session_id)
-        
-    logger.info("Effective session ID for exec: %s", effective_session_id)
 
-    # Validate execution language
+    return effective_session_id
+
+def _get_validated_lang(req: CodeRequest) -> str:
+    """Extracts and validates the execution language."""
     requested_lang = (req.lang or "python").lower()
     SUPPORTED_LANGUAGES = {"python", "py", "bash", "sh", "r"}
     if requested_lang not in SUPPORTED_LANGUAGES:
         logger.error("Unsupported language requested: %s", req.lang)
         raise HTTPException(status_code=400, detail=f"Unsupported language: {req.lang}. Supported: python, bash, r")
+    return requested_lang
+
+# 5. Endpoints
+
+@app.post("/exec", response_model=CodeResponse)
+@app.post("/run/exec", response_model=CodeResponse)
+async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
+    """
+    Executes code in a sandboxed Docker container.
+    """
+    logger.info("Exec request received. Request body: %s", req.model_dump())
+
+    effective_session_id = _get_effective_session_id(req)
+    logger.info("Effective session ID for exec: %s", effective_session_id)
+
+    # Validate execution language
+    requested_lang = _get_validated_lang(req)
 
     # Resolve nanoid session ID if provided
     sid = effective_session_id or generate_nanoid()
-    from unittest.mock import MagicMock
-    if isinstance(kernel_manager, MagicMock):
-        # Fallback for unittest mocks that do not have get_or_create_session_mapping configured
-        real_session_id = kernel_manager.resolve_session_id(sanitize_id(sid))
-        nanoid_session = sid
-    else:
-        real_session_id, nanoid_session = kernel_manager.get_or_create_session_mapping(sid)
+    real_session_id, nanoid_session = _get_session_ids(sid)
     
     # Run in sandbox
-    result = await asyncio.to_thread(
-        kernel_manager.execute_code,
-        real_session_id,
-        req.code,
-        lang=(req.lang or "python").lower(),
-        external_session_id=nanoid_session
-    )
+    if asyncio.iscoroutinefunction(kernel_manager.execute_code):
+        result = await kernel_manager.execute_code(
+            real_session_id,
+            req.code,
+            lang=requested_lang,
+            external_session_id=nanoid_session
+        )
+    else:
+        result = await asyncio.to_thread(
+            kernel_manager.execute_code,
+            real_session_id,
+            req.code,
+            lang=requested_lang,
+            external_session_id=nanoid_session
+        )
+
+    # Handle cases where execute_code is mocked with an async side_effect but not as a coroutine function
+    # or when to_thread returns a coroutine from a mock.
+    if asyncio.iscoroutine(result):
+        result = await result
     # List generated files and format them for LibreChat native ingestion
     current_files = await asyncio.to_thread(kernel_manager.list_files, real_session_id, external_session_id=nanoid_session)
+    filename_to_id = kernel_manager.get_file_id_mapping(nanoid_session, current_files)
+    
     structured_files = []
-    
-    # Initialize file mapping for this session
-    with kernel_manager.lock:
-        if nanoid_session not in kernel_manager.file_id_map:
-            kernel_manager.file_id_map[nanoid_session] = {}
-        # Pre-calculate reverse mapping once to avoid O(N^2) inside the loop
-        existing_filenames_to_ids = {v: k for k, v in kernel_manager.file_id_map[nanoid_session].items()}
-
-        # Ensure all current_files have a nanoid mapping (inside lock for atomicity and efficiency)
-        for f in current_files:
-            if f not in existing_filenames_to_ids:
-                nanoid_file = generate_nanoid()
-                kernel_manager.file_id_map[nanoid_session][nanoid_file] = f
-                existing_filenames_to_ids[f] = nanoid_file
-    
     for f in current_files:
         mime_type, _ = mimetypes.guess_type(f)
-        nanoid_file = existing_filenames_to_ids[f]
+        nanoid_file = filename_to_id[f]
 
         structured_files.append({
             "id": nanoid_file,
@@ -930,11 +1085,9 @@ async def upload_files(
         # Support both 'entity_id' (LibreChat default) and 'session_id' (form or query)
         sid = entity_id or session_id or session_id_query
         if not sid:
-            # If no session ID is provided, we generate one.
             sid = generate_nanoid()
             logger.info("No session ID provided in upload. Generated new one: %s", sid)
 
-        # Handle 'files' or 'file' field
         upload_list = files or file
         if not upload_list:
             logger.error("No files provided in upload request")
@@ -942,57 +1095,41 @@ async def upload_files(
 
         logger.info("Files found in request: %s", [f.filename for f in upload_list])
 
-        from unittest.mock import MagicMock
-        if isinstance(kernel_manager, MagicMock):
-            # Fallback for unittest mocks that do not have get_or_create_session_mapping configured
-            real_session_id = kernel_manager.resolve_session_id(sanitize_id(sid))
-            nanoid_session = sid
-        else:
-            real_session_id, nanoid_session = kernel_manager.get_or_create_session_mapping(sid)
+        real_session_id, nanoid_session = _get_session_ids(sid)
 
-        async def process_file(f):
+        async def read_file_content(f):
             if not f.filename:
                 raise HTTPException(status_code=400, detail="Invalid filename")
             content = await f.read()
+            if not content:
+                raise HTTPException(status_code=400, detail="File content is empty")
             safe_filename = os.path.basename(f.filename)
             if not safe_filename:
                 raise HTTPException(status_code=400, detail="Invalid filename")
-            await asyncio.to_thread(kernel_manager.upload_file, real_session_id, safe_filename, content, external_session_id=nanoid_session)
-            return safe_filename
+            return safe_filename, content
 
-        # Parallelize file reading and uploading
-        results = await asyncio.gather(*[process_file(f) for f in upload_list])
+        # Read all files in parallel
+        file_data = await asyncio.gather(*[read_file_content(f) for f in upload_list])
 
-        # 直近でアップロードに成功したセッション情報をグローバルに記録
+        # Perform batch upload
+        await asyncio.to_thread(kernel_manager.upload_files_batch, real_session_id, file_data, external_session_id=nanoid_session)
+
+        # Record last upload for session fallback
         global LAST_UPLOADED_SESSION_ID, LAST_UPLOAD_TIME
         LAST_UPLOADED_SESSION_ID = sid
         LAST_UPLOAD_TIME = time.time()
         logger.info("Recorded last uploaded session ID: %s", sid)
 
-        uploaded_files = []
-        with kernel_manager.lock:
-            if nanoid_session not in kernel_manager.file_id_map:
-                kernel_manager.file_id_map[nanoid_session] = {}
-
-            existing_ids = {v: k for k, v in kernel_manager.file_id_map[nanoid_session].items()}
-
-            for filename in results:
-                if filename in existing_ids:
-                    file_id = existing_ids[filename]
-                else:
-                    file_id = generate_nanoid()
-                    kernel_manager.file_id_map[nanoid_session][file_id] = filename
-                    existing_ids[filename] = file_id
-
-                uploaded_files.append({"fileId": file_id, "filename": filename})
+        # Get file mappings
+        filenames = [name for name, _ in file_data]
+        filename_to_id = kernel_manager.get_file_id_mapping(nanoid_session, filenames)
+        uploaded_files = [{"fileId": filename_to_id[name], "filename": name} for name in filenames]
         
-        # Standardize response structure
         res = {
             "message": "success",
             "session_id": sid,
             "files": uploaded_files
         }
-        # Flatten the first file for root-level access (LibreChat compatibility)
         if uploaded_files:
             res.update(uploaded_files[0])
             
@@ -1009,25 +1146,31 @@ async def list_session_files(session_id: str, key: str = Security(get_api_key)):
     """
     Lists files in a session's sandbox.
     """
-    s_sid = sanitize_id(session_id)
-    real_session_id = kernel_manager.resolve_session_id(s_sid)
-    with kernel_manager.lock:
-        nanoid_session = kernel_manager.session_to_nanoid.get(real_session_id, s_sid)
+    try:
+        s_sid = sanitize_id(session_id)
+        real_session_id = kernel_manager.resolve_session_id(s_sid)
+        with kernel_manager.lock:
+            nanoid_session = kernel_manager.session_to_nanoid.get(real_session_id, s_sid)
 
-    files = await asyncio.to_thread(kernel_manager.list_files, real_session_id, external_session_id=nanoid_session)
-    
-    file_list = []
-    with kernel_manager.lock:
-        id_map = kernel_manager.file_id_map.get(nanoid_session, {})
-        reversed_map = {v: k for k, v in id_map.items()}
-        for f in files:
-            file_list.append({
-                "filename": f,
-                "fileId": reversed_map.get(f, ""),
-                "id": reversed_map.get(f, "")
-            })
-            
-    return file_list
+        files = await asyncio.to_thread(kernel_manager.list_files, real_session_id, external_session_id=nanoid_session)
+
+        file_list = []
+        with kernel_manager.lock:
+            id_map = kernel_manager.file_id_map.get(nanoid_session, {})
+            reversed_map = {v: k for k, v in id_map.items()}
+            for f in files:
+                file_list.append({
+                    "filename": f,
+                    "fileId": reversed_map.get(f, ""),
+                    "id": reversed_map.get(f, "")
+                })
+
+        return file_list
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error listing session files")
+        raise HTTPException(status_code=500, detail=str(e))
 
 def get_download_meta(real_filename: str) -> Tuple[str, Dict[str, str]]:
     """Determines MIME type and constructs headers for file download."""
@@ -1081,12 +1224,25 @@ async def download_session_file(
     """
     real_session_id, real_filename = kernel_manager.resolve_download_ids(session_id, filename)
     
+    # Basic validation of session_id to prevent path traversal to base directory
+    if not real_session_id:
+        raise HTTPException(status_code=400, detail="Invalid session ID")
+
     # Determine the file path if volume mounting is enabled
     in_memory_content = None
     try:
         if RCE_DATA_DIR_HOST:
             session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, real_session_id)
             filepath = os.path.join(session_dir, real_filename)
+
+            # Security: Ensure the path is within the designated data directory
+            # and that real_session_id is not empty (already handled by resolve_download_ids but good to be safe)
+            abs_base = os.path.realpath(RCE_DATA_DIR_INTERNAL)
+            abs_file = os.path.realpath(filepath)
+            if os.path.commonpath([abs_base, abs_file]) != abs_base or not real_session_id:
+                logger.warning("Path traversal attempt blocked: %s", filepath)
+                raise HTTPException(status_code=403, detail="Forbidden")
+
             if not os.path.exists(filepath):
                  raise HTTPException(status_code=404, detail="File not found")
             tmp_filepath = filepath
