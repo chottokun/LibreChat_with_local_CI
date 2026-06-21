@@ -1123,25 +1123,31 @@ async def list_session_files(session_id: str, key: str = Security(get_api_key)):
     """
     Lists files in a session's sandbox.
     """
-    s_sid = sanitize_id(session_id)
-    real_session_id = kernel_manager.resolve_session_id(s_sid)
-    with kernel_manager.lock:
-        nanoid_session = kernel_manager.session_to_nanoid.get(real_session_id, s_sid)
+    try:
+        s_sid = sanitize_id(session_id)
+        real_session_id = kernel_manager.resolve_session_id(s_sid)
+        with kernel_manager.lock:
+            nanoid_session = kernel_manager.session_to_nanoid.get(real_session_id, s_sid)
 
-    files = await asyncio.to_thread(kernel_manager.list_files, real_session_id, external_session_id=nanoid_session)
-    
-    file_list = []
-    with kernel_manager.lock:
-        id_map = kernel_manager.file_id_map.get(nanoid_session, {})
-        reversed_map = {v: k for k, v in id_map.items()}
-        for f in files:
-            file_list.append({
-                "filename": f,
-                "fileId": reversed_map.get(f, ""),
-                "id": reversed_map.get(f, "")
-            })
-            
-    return file_list
+        files = await asyncio.to_thread(kernel_manager.list_files, real_session_id, external_session_id=nanoid_session)
+
+        file_list = []
+        with kernel_manager.lock:
+            id_map = kernel_manager.file_id_map.get(nanoid_session, {})
+            reversed_map = {v: k for k, v in id_map.items()}
+            for f in files:
+                file_list.append({
+                    "filename": f,
+                    "fileId": reversed_map.get(f, ""),
+                    "id": reversed_map.get(f, "")
+                })
+
+        return file_list
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error listing session files")
+        raise HTTPException(status_code=500, detail=str(e))
 
 def get_download_meta(real_filename: str) -> Tuple[str, Dict[str, str]]:
     """Determines MIME type and constructs headers for file download."""
