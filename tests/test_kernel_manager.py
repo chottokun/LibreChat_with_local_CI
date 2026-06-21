@@ -91,16 +91,16 @@ def test_get_or_create_container_missing_during_reload(kernel_manager):
         "last_accessed": time.time()
     }
 
-    # Mock start_new_container_unlocked on the instance
+    # Mock start_new_container on the instance
     new_container = MagicMock()
-    kernel_manager.start_new_container_unlocked = MagicMock(return_value=new_container)
+    kernel_manager.start_new_container = MagicMock(return_value=new_container)
 
     # Execute
     container = kernel_manager.get_or_create_container(session_id, force_refresh=True)
 
     # Assert: container should be the new one created after the old one was not found
     assert container == new_container
-    kernel_manager.start_new_container_unlocked.assert_called_once_with(session_id, None)
+    kernel_manager.start_new_container.assert_called_once_with(session_id, None)
 
 def test_start_new_container_success(kernel_manager):
     session_id = "new_session"
@@ -446,9 +446,9 @@ def test_get_or_create_container_generic_exception_during_start(kernel_manager):
         "last_accessed": time.time()
     }
 
-    # Mock start_new_container_unlocked on the instance to verify session deletion
+    # Mock start_new_container on the instance to verify session deletion
     new_container = MagicMock()
-    def mock_start_new_unlocked(sid, external_session_id=None):
+    def mock_start_new(sid, external_session_id=None):
         assert sid == session_id
         # At this point, the old session MUST have been deleted from active_kernels
         assert session_id not in kernel_manager.active_kernels
@@ -456,7 +456,7 @@ def test_get_or_create_container_generic_exception_during_start(kernel_manager):
         kernel_manager.active_kernels[sid] = {"container": new_container, "last_accessed": time.time()}
         return new_container
 
-    kernel_manager.start_new_container_unlocked = MagicMock(side_effect=mock_start_new_unlocked)
+    kernel_manager.start_new_container = MagicMock(side_effect=mock_start_new)
 
     # Execute - Force refresh=True ensures we enter the block where start() is called
     container = kernel_manager.get_or_create_container(session_id, force_refresh=True)
@@ -464,7 +464,7 @@ def test_get_or_create_container_generic_exception_during_start(kernel_manager):
     # Assert
     assert container == new_container
     mock_container.start.assert_called_once()
-    kernel_manager.start_new_container_unlocked.assert_called_once_with(session_id, None)
+    kernel_manager.start_new_container.assert_called_once_with(session_id, None)
 
 def test_get_or_create_container_generic_exception_during_reload(kernel_manager):
     # Setup
@@ -477,9 +477,9 @@ def test_get_or_create_container_generic_exception_during_reload(kernel_manager)
         "last_accessed": time.time()
     }
 
-    # Mock start_new_container_unlocked on the instance to verify session deletion
+    # Mock start_new_container on the instance to verify session deletion
     new_container = MagicMock()
-    def mock_start_new_unlocked(sid, external_session_id=None):
+    def mock_start_new(sid, external_session_id=None):
         assert sid == session_id
         # At this point, the old session MUST have been deleted from active_kernels
         assert session_id not in kernel_manager.active_kernels
@@ -487,7 +487,7 @@ def test_get_or_create_container_generic_exception_during_reload(kernel_manager)
         kernel_manager.active_kernels[sid] = {"container": new_container, "last_accessed": time.time()}
         return new_container
 
-    kernel_manager.start_new_container_unlocked = MagicMock(side_effect=mock_start_new_unlocked)
+    kernel_manager.start_new_container = MagicMock(side_effect=mock_start_new)
 
     # Execute - Force refresh=True ensures we enter the block where reload() is called
     container = kernel_manager.get_or_create_container(session_id, force_refresh=True)
@@ -495,7 +495,7 @@ def test_get_or_create_container_generic_exception_during_reload(kernel_manager)
     # Assert
     assert container == new_container
     mock_container.reload.assert_called_once()
-    kernel_manager.start_new_container_unlocked.assert_called_once_with(session_id, None)
+    kernel_manager.start_new_container.assert_called_once_with(session_id, None)
 
 def test_recover_containers_with_external_id_success(kernel_manager):
     """Verifies that recover_containers correctly restores NanoID mappings."""

@@ -17,9 +17,9 @@ def kernel_manager():
     km.active_kernels = {} # Clear it for each test
     return km
 
-def test_start_new_container_unlocked_stop_failure(kernel_manager, mock_docker_client, caplog):
+def test_start_new_container_stop_failure(kernel_manager, mock_docker_client, caplog):
     """
-    Test that KernelManager.start_new_container_unlocked correctly handles a failure
+    Test that KernelManager.start_new_container correctly handles a failure
     when trying to stop the container after an initial startup failure.
     Verifies the inner try-except block in the error handler.
     """
@@ -28,7 +28,7 @@ def test_start_new_container_unlocked_stop_failure(kernel_manager, mock_docker_c
     mock_container.id = "mock_container_id_stop_fail"
     mock_docker_client.containers.run.return_value = mock_container
 
-    # 1. Trigger the initial failure in start_new_container_unlocked
+    # 1. Trigger the initial failure in start_new_container
     # We'll make exec_run fail to enter the 'except Exception' block.
     mock_container.exec_run.side_effect = Exception("Initial exec failure")
 
@@ -37,7 +37,7 @@ def test_start_new_container_unlocked_stop_failure(kernel_manager, mock_docker_c
 
     with caplog.at_level(logging.ERROR):
         with pytest.raises(HTTPException) as excinfo:
-            kernel_manager.start_new_container_unlocked(session_id)
+            kernel_manager.start_new_container(session_id)
 
         assert excinfo.value.status_code == 500
         assert "Failed to start sandbox" in excinfo.value.detail
@@ -48,9 +48,9 @@ def test_start_new_container_unlocked_stop_failure(kernel_manager, mock_docker_c
     # Verify that the session was NOT added to active_kernels
     assert session_id not in kernel_manager.active_kernels
 
-def test_start_new_container_unlocked_stop_failure_no_id(kernel_manager, mock_docker_client, caplog):
+def test_start_new_container_stop_failure_no_id(kernel_manager, mock_docker_client, caplog):
     """
-    Edge case: Test that KernelManager.start_new_container_unlocked handles stop failure
+    Edge case: Test that KernelManager.start_new_container handles stop failure
     even if the container object somehow lacks an 'id' attribute.
     """
     session_id = "test_session_stop_fail_no_id"
@@ -64,7 +64,7 @@ def test_start_new_container_unlocked_stop_failure_no_id(kernel_manager, mock_do
 
     with caplog.at_level(logging.ERROR):
         with pytest.raises(HTTPException) as excinfo:
-            kernel_manager.start_new_container_unlocked(session_id)
+            kernel_manager.start_new_container(session_id)
 
         assert excinfo.value.status_code == 500
         # Verify that "unknown" was used as the ID in the log

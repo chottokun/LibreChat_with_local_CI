@@ -410,7 +410,7 @@ class KernelManager:
                         self.active_kernels.pop(session_id, None)
                     # Fall through to create new
 
-            return self.start_new_container_unlocked(session_id, external_session_id)
+            return self.start_new_container(session_id, external_session_id)
 
     def start_new_container(self, session_id: str, external_session_id: Optional[str] = None):
         session_lock = self._get_session_lock(session_id)
@@ -471,10 +471,6 @@ class KernelManager:
                     except Exception as stop_err:
                         logger.error("Failed to stop container %s after startup failure: %s", container.id if hasattr(container, "id") else "unknown", stop_err)
                 raise HTTPException(status_code=500, detail="Failed to start sandbox. Please contact an administrator.")
-
-    def start_new_container_unlocked(self, session_id: str, external_session_id: Optional[str] = None):
-        """Deprecated: Use start_new_container instead. Maintained for test compatibility."""
-        return self.start_new_container(session_id, external_session_id)
 
     def _get_container_config(self) -> Dict[str, Any]:
         """Parses resource limits and configuration from environment variables."""
