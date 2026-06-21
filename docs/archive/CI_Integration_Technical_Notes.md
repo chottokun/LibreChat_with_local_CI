@@ -14,11 +14,11 @@ This document summarizes the current integration status and verified features of
 
 ### PDF Upload Test
 Verified that PDF files can be uploaded and processed without errors.
-![PDF Upload Success](/home/nobuhiko/.gemini/antigravity/brain/b347543b-8340-4308-930f-61a22e510652/librechat_ci_agent_pdf_test_1771668899648.webp)
+![PDF Upload Success](file:///path/to/librechat_ci_agent_pdf_test_1771668899648.webp)
 
 ### Full Cycle (Upload -> Run -> Download)
 The following recording shows a successful full cycle where a file is uploaded, used in code execution, and a result is downloaded.
-![Full Cycle Test](/home/nobuhiko/.gemini/antigravity/brain/b347543b-8340-4308-930f-61a22e510652/librechat_full_cycle_test_v2_1771663336267.webp)
+![Full Cycle Test](file:///path/to/librechat_full_cycle_test_v2_1771663336267.webp)
 
 ## Conclusion
 The integration is currently stable. If you encounter UI inconsistencies, clearing the browser cache or starting a fresh chat session is recommended.

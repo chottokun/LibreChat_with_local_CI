@@ -175,9 +175,7 @@ Ollama officially supports OpenAI-compatible API paths. Integrate it as a custom
 ### 4. Technical Architecture and Bug Reference Specifications
 For detailed internal specifications regarding character encoding, path resolutions, and automatic API mitigation systems, refer to the dedicated technical documents in the `/docs` directory for future development:
 
-* **[Japanese Filename Preservation & Spec Reference](file://./docs/librechat_japanese_filename_bug.md)**:
-  Technical specifications for upstream database UTF-8 metadata delegation and API sandbox-side preservation (os.listdir, locale, and RFC 5987 downloads).
-* **[Session ID Resolution & Automatic Fallback Reference](file://./docs/librechat_session_id_bug_analysis.md)**:
-  Technical design documentation for managing missing Session IDs, covering the API-side `user_id` binding and recently-uploaded session cache lookups that achieve sub-second execution latency.
-
-
+* **[Japanese Filename Preservation & Spec Reference](./docs/librechat_japanese_filename_bug.md)**:
+  Deep dive technical notes explaining how the UTF-8 original filenames are parsed, and how the UTF-8 locale environment inside the container is set up to prevent character corruption.
+* **[Session ID Resolution & Automatic Fallback Reference](./docs/librechat_session_id_bug_analysis.md)**:
+  Detailed analysis of LibreChat's session ID omission behavior and how the API manages state using user_id bindings and short-term cache fallback mechanisms.
