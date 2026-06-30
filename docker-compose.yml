@@ -28,7 +28,7 @@ services:
       dockerfile: Dockerfile.api
     container_name: librechat_code_interpreter_api
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
       - LIBRECHAT_CODE_API_KEY=${LIBRECHAT_CODE_API_KEY}
       - DISABLE_CODE_API_AUTH=${DISABLE_CODE_API_AUTH:-false}

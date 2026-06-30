@@ -24,7 +24,7 @@
 - [x] **A-1**: `docker-compose.librechat.yml` に `sandpack-bundler` サービスが定義されていること。
 - [x] **A-2**: `sandpack-bundler` サービスに `ssl-mode` プロファイルが定義されていること.
 - [x] **A-3**: `.env.librechat` にフェーズ1、2および3の説明文が存在し、かつデフォルトで `SANDPACK_BUNDLER_URL` が空であること。
-- [x] **A-4**: `Caddyfile` が存在し、 `blue-two.local:443` および `blue-two.local:8443` に対する `tls` 設定があること。
+- [x] **A-4**: `Caddyfile` が存在し、 `your-domain.local:443` および `your-domain.local:8443` に対する `tls` 設定があること。
 - [x] **A-5**: `docker-compose.librechat.yml` に `caddy` サービスが定義され、 `ssl-mode` プロファイル、ポート（443, 8443）、ボリュームが設定されていること。
 - [x] **A-6**: `docker-compose.librechat.yml` の `volumes` 定義に `caddy-data` および `caddy-config` が定義されていること。
 - [x] **A-7**: `Caddyfile` でカスタム証明書環境変数 `CUSTOM_CERT_PATH` / `CUSTOM_KEY_PATH` の参照によるハイブリッドTLSが設定されていること。

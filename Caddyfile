@@ -1,5 +1,5 @@
 # LibreChat本体のHTTPS化（ポート443）
-:443, blue-two.local:443 {
+:443, your-domain.local:443 {
     reverse_proxy librechat:3080
     
     # 自己署名証明書の自動生成（デフォルト）
@@ -9,7 +9,7 @@
 }
 
 # Sandpack BundlerのHTTPS化（ポート8443）
-:8443, blue-two.local:8443 {
+:8443, your-domain.local:8443 {
     reverse_proxy sandpack-bundler:80
     
     # 自己署名証明書の自動生成（デフォルト）

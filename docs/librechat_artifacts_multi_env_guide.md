@@ -97,15 +97,15 @@ docker compose -f docker-compose.yml -f docker-compose.librechat.yml --profile s
 # Artifacts（React等のUI描画機能）をローカル環境で動作させるための設定です。
 #
 # 【フェーズ1: 非SSL環境 (デフォルト)】
-# 他のPC等のブラウザから http://blue-two.local:3000 でアクセスする場合、
+# 他のPC等のブラウザから http://your-domain.local:3000 でアクセスする場合、
 # ブラウザのセキュリティ制限（Service Worker制限）によりローカルBundlerへの通信はブロックされます。
 # そのため、以下の設定値は「指定なし（空値）」にするかコメントアウトしてください。
 # SANDPACK_BUNDLER_URL=
 
 # 【フェーズ2・3: SSL環境 (HTTPS移行時)】
-# Caddy等を用いてHTTPS化（例: https://blue-two.local:3000）を完了した場合は、
+# Caddy等を用いてHTTPS化（例: https://your-domain.local:3000）を完了した場合は、
 # コメントアウトを解除し、HTTPS形式の接続先を指定してください。
-# SANDPACK_BUNDLER_URL=https://blue-two.local:8080
+# SANDPACK_BUNDLER_URL=https://your-domain.local:8443
 ```
 
 ---
@@ -128,7 +128,7 @@ SSL環境への移行準備（フェーズ2）として、最も簡単かつ自�
 プロジェクト直下に `Caddyfile` を作成します。
 ```caddy
 # LibreChat本体のHTTPS化（ポート443）
-blue-two.local:443 {
+your-domain.local:443 {
     reverse_proxy librechat:3080
     
     # 自己署名証明書の自動生成（検証用）
@@ -136,7 +136,7 @@ blue-two.local:443 {
 }
 
 # Sandpack BundlerのHTTPS化（ポート8443）
-blue-two.local:8443 {
+your-domain.local:8443 {
     reverse_proxy sandpack-bundler:80
     
     # 自己署名証明書の自動生成（検証用）
@@ -168,7 +168,7 @@ docker cp caddy:/data/caddy/pki/authorities/local/root.crt ./root.crt
 
 #### 3. 動作テストの実行
 1. ルート証明書のインポート完了後、ブラウザを一度完全に閉じて再起動します。
-2. **`https://blue-two.local:3000`** にアクセスします（アドレスバーの警告が消え、完全に鍵マークのついた安全な接続になっていることを確認します）。
+2. **`https://your-domain.local:3000`** にアクセスします（アドレスバーの警告が消え、完全に鍵マークのついた安全な接続になっていることを確認します）。
 3. これにより、ブラウザは完全なセキュアコンテキストとしてSandpackを認識するため、Service Workerがエラーなく正常にアクティベートされ、Artifactsが100%機能するようになります。
 
 ---

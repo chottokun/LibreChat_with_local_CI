@@ -56,7 +56,7 @@ services:
     container_name: librechat
     restart: always
     ports:
-      - "${LIBRECHAT_PORT:-3000}:3080"
+      - "127.0.0.1:${LIBRECHAT_PORT:-3000}:3080"
     depends_on:
       - mongodb
       - meilisearch
@@ -123,7 +123,7 @@ services:
     container_name: sandpack-bundler
     restart: always
     ports:
-      - "${SANDPACK_PORT:-8080}:80"
+      - "127.0.0.1:${SANDPACK_PORT:-8080}:80"
     profiles:
       - ssl-mode  # ★「ssl-mode」プロファイル指定時のみコンテナを起動する
     networks:

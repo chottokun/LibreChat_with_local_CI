@@ -17,12 +17,12 @@ def test_caddyfile_exists_and_configured():
     with open(CADDYFILE_PATH, "r", encoding="utf-8") as f:
         content = f.read()
         
-    # blue-two.local:443 と tls internal の設定確認
-    assert "blue-two.local:443" in content, "Caddyfile に blue-two.local:443 の定義がありません。"
+    # your-domain.local:443 と tls internal の設定確認
+    assert "your-domain.local:443" in content, "Caddyfile に your-domain.local:443 の定義がありません。"
     assert "reverse_proxy librechat:3080" in content, "Caddyfile に librechat:3080 へのリバースプロキシ設定がありません。"
     
-    # blue-two.local:8443 と tls internal の設定確認
-    assert "blue-two.local:8443" in content, "Caddyfile に blue-two.local:8443 の定義がありません。"
+    # your-domain.local:8443 と tls internal の設定確認
+    assert "your-domain.local:8443" in content, "Caddyfile に your-domain.local:8443 の定義がありません。"
     assert "reverse_proxy sandpack-bundler:80" in content, "Caddyfile に sandpack-bundler:80 へのリバースプロキシ設定がありません。"
     
     # tls 設定の存在確認 (自己署名、またはカスタムCAをサポートする形式)
