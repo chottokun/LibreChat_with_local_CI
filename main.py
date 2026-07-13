@@ -1087,7 +1087,10 @@ async def upload_files(
                 logger.info("アップロードでフォールバックが有効化されました！直近のアップロードセッションIDを再利用します: %s", sid)
             else:
                 sid = generate_nanoid()
-                logger.info("アップロードにセッションIDが指定されていません。新規に生成します: %s", sid)
+                # 非同期待ちに入る前に、新しく生成したセッションIDを即座にグローバルに登録して再利用を可能にする
+                LAST_UPLOADED_SESSION_ID = sid
+                LAST_UPLOAD_TIME = time.time()
+                logger.info("アップロードにセッションIDが指定されていません。新規に生成して即時登録しました: %s", sid)
 
         upload_list = files or file
         if not upload_list:

@@ -170,3 +170,43 @@ def test_exec_aggregates_files_from_different_sessions():
                     # 実行対象のセッション (main-exec-session) へのアップロードが走ったことを確認
                     mock_upload.assert_called_once()
                     assert mock_upload.call_args[0][1] == "other.txt"
+
+
+@pytest.mark.anyio
+async def test_upload_parallel_concurrent_instant_reuse():
+    """
+    非同期クライアントを用いて、セッションIDなしのアップロードリクエストを
+    同時に並行して送信（asyncio.gather）した際、
+    最初の非同期待ちの前に生成されたセッションIDが、
+    もう一方のリクエストで即座に採用・再利用されることを検証します。
+    """
+    import asyncio
+    from httpx import AsyncClient, ASGITransport
+    from main import app, API_KEY
+    
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        # 1. 2つのアップロードリクエストを並行して実行
+        # 同時並行処理におけるセッションIDの即時登録と再利用をテスト
+        res1_task = ac.post(
+            "/upload",
+            headers={"X-API-Key": API_KEY},
+            files={"files": ("file1.txt", b"file1 content")}
+        )
+        res2_task = ac.post(
+            "/upload",
+            headers={"X-API-Key": API_KEY},
+            files={"files": ("file2.txt", b"file2 content")}
+        )
+        
+        # モックは使用せず、通常のAPIフローを通してセッション解決を検証
+        with patch.object(kernel_manager, 'upload_files_batch'):
+            res1, res2 = await asyncio.gather(res1_task, res2_task)
+            
+        assert res1.status_code == 200
+        assert res2.status_code == 200
+        
+        sid1 = res1.json()["session_id"]
+        sid2 = res2.json()["session_id"]
+        
+        # 即時登録によって同じセッションIDが割り振られていることを確認
+        assert sid1 == sid2
