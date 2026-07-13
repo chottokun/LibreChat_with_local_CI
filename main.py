@@ -1000,6 +1000,20 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
     # Resolve nanoid session ID if provided
     sid = effective_session_id or generate_nanoid()
     real_session_id, nanoid_session = _get_session_ids(sid)
+
+    # 異なるセッションにアップロードされたファイルを現在の実行セッションに集約（堅牢化設計）
+    if req.files:
+        for file_info in req.files:
+            file_sid = file_info.session_id or file_info.storage_session_id
+            if file_sid:
+                file_real_sid, file_nanoid_sid = _get_session_ids(file_sid)
+                if file_real_sid != real_session_id:
+                    try:
+                        logger.info("ファイルをセッション %s から実行セッション %s に集約します: %s", file_nanoid_sid, nanoid_session, file_info.name)
+                        file_content, _ = await asyncio.to_thread(kernel_manager.download_file, file_real_sid, file_info.name)
+                        await asyncio.to_thread(kernel_manager.upload_file, real_session_id, file_info.name, file_content, external_session_id=nanoid_session)
+                    except Exception as e:
+                        logger.warning("ファイル %s の集約に失敗しました: %s", file_info.name, str(e))
     
     # Run in sandbox
     if asyncio.iscoroutinefunction(kernel_manager.execute_code):

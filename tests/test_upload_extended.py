@@ -130,3 +130,43 @@ def test_upload_parallel_no_session_id_reuses_same_session():
 
         # 同一セッションにバインドされていることを確認
         assert sid1 == sid2
+
+
+def test_exec_aggregates_files_from_different_sessions():
+    """
+    実行リクエスト（/exec）において、異なるセッションIDを持つ複数のファイルが渡された場合、
+    それらが実行対象のセッション（コンテナ）へ自動的にコピー・集約されることを検証します。
+    """
+    with patch.object(kernel_manager, 'execute_code') as mock_exec:
+        with patch.object(kernel_manager, 'list_files', return_value=[]):
+            with patch.object(kernel_manager, 'download_file') as mock_download:
+                with patch.object(kernel_manager, 'upload_file') as mock_upload:
+                    mock_exec.return_value = {"stdout": "ok", "stderr": "", "exit_code": 0}
+                    # download_file は (content, mtime) を返す
+                    mock_download.return_value = (b"file content", 0)
+
+                    # /exec リクエストに異なるセッションIDのファイル情報を含める
+                    response = client.post(
+                        "/exec",
+                        headers={"X-API-Key": API_KEY},
+                        json={
+                            "code": "print('hello')",
+                            "session_id": "main-exec-session",
+                            "files": [
+                                {
+                                    "id": "file-id-1",
+                                    "name": "other.txt",
+                                    "session_id": "other-session"
+                                }
+                            ]
+                        }
+                    )
+
+                    assert response.status_code == 200
+                    # 他のセッション (other-session) からのダウンロードが走ったことを確認
+                    mock_download.assert_called_once()
+                    assert mock_download.call_args[0][1] == "other.txt"
+
+                    # 実行対象のセッション (main-exec-session) へのアップロードが走ったことを確認
+                    mock_upload.assert_called_once()
+                    assert mock_upload.call_args[0][1] == "other.txt"
