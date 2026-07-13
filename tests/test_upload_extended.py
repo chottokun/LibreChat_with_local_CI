@@ -98,3 +98,35 @@ def test_upload_special_characters_session_id_mapping():
         with kernel_manager.lock:
             assert kernel_manager.nanoid_to_session[sanitized_sid] == real_sid
             assert kernel_manager.session_to_nanoid[real_sid] == sanitized_sid
+
+
+def test_upload_parallel_no_session_id_reuses_same_session():
+    """
+    セッションIDが指定されていない並行アップロードにおいて、
+    2回目以降のアップロードが最初のアップロードで生成されたセッションIDを
+    正しく再利用することを検証します。
+    """
+    with patch.object(kernel_manager, 'upload_files_batch'):
+        # 1. 最初のファイルをセッションIDなしでアップロード
+        response1 = client.post(
+            "/upload",
+            headers={"X-API-Key": API_KEY},
+            files=[("files", ("first.txt", b"first file content"))]
+        )
+        assert response1.status_code == 200
+        data1 = response1.json()
+        sid1 = data1["session_id"]
+        assert len(sid1) == 21  # Nanoid
+
+        # 2. 2番目のファイルをセッションIDなしで即座にアップロード
+        response2 = client.post(
+            "/upload",
+            headers={"X-API-Key": API_KEY},
+            files=[("files", ("second.txt", b"second file content"))]
+        )
+        assert response2.status_code == 200
+        data2 = response2.json()
+        sid2 = data2["session_id"]
+
+        # 同一セッションにバインドされていることを確認
+        assert sid1 == sid2

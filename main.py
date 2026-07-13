@@ -1063,11 +1063,17 @@ async def upload_files(
     Uploads files to a specific session sandbox.
     """
     try:
-        # Support both 'entity_id' (LibreChat default) and 'session_id' (form or query)
+        global LAST_UPLOADED_SESSION_ID, LAST_UPLOAD_TIME
+        # 'entity_id' (LibreChatのデフォルト) と 'session_id' (フォームまたはクエリ) の両方をサポート
         sid = entity_id or session_id or session_id_query
         if not sid:
-            sid = generate_nanoid()
-            logger.info("No session ID provided in upload. Generated new one: %s", sid)
+            # 同一セッション内での並行アップロードを処理するため、直近のアップロードセッションにフォールバック
+            if LAST_UPLOADED_SESSION_ID and (time.time() - LAST_UPLOAD_TIME < 300):
+                sid = LAST_UPLOADED_SESSION_ID
+                logger.info("アップロードでフォールバックが有効化されました！直近のアップロードセッションIDを再利用します: %s", sid)
+            else:
+                sid = generate_nanoid()
+                logger.info("アップロードにセッションIDが指定されていません。新規に生成します: %s", sid)
 
         upload_list = files or file
         if not upload_list:
@@ -1096,7 +1102,6 @@ async def upload_files(
         await asyncio.to_thread(kernel_manager.upload_files_batch, real_session_id, file_data, external_session_id=nanoid_session)
 
         # Record last upload for session fallback
-        global LAST_UPLOADED_SESSION_ID, LAST_UPLOAD_TIME
         LAST_UPLOADED_SESSION_ID = sid
         LAST_UPLOAD_TIME = time.time()
         logger.info("Recorded last uploaded session ID: %s", sid)

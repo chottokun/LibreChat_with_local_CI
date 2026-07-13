@@ -8,7 +8,9 @@ client = TestClient(app)
 
 @pytest.fixture(autouse=True)
 def reset_kernel_manager():
-    # Clear mappings before each test
+    # テスト間の分離を保証するため、グローバル状態およびマッピングをクリア
+    main.LAST_UPLOADED_SESSION_ID = None
+    main.LAST_UPLOAD_TIME = 0
     with kernel_manager.lock:
         kernel_manager.active_kernels = {}
         kernel_manager.nanoid_to_session = {}
