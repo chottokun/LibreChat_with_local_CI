@@ -24,7 +24,7 @@
 ### `Dockerfile.rce` の設計と役割
 
 ```dockerfile
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 # 1. 日本語ファイル名およびUTF-8入出力の完全サポート
 ENV LANG=C.UTF-8
@@ -44,12 +44,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # 4. 依存ライブラリのインストール
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel jaraco.context && \
+RUN pip install --no-cache-dir --upgrade pip "setuptools>=78.1.1" wheel "msgpack>=1.2.1" jaraco.context && \
     pip install --no-cache-dir -r rce_requirements.txt
 
 # 5. japanize-matplotlib のスタートアップ自動ロード設定
 # これにより、ユーザーコード側で明示的に import しなくても、Matplotlib の日本語文字化けとフォント警告を自動的に回避します。
-RUN printf "try:\n    import japanize_matplotlib\nexcept ImportError:\n    pass\n" > /usr/local/lib/python3.11/site-packages/sitecustomize.py
+RUN printf "try:\n    import japanize_matplotlib\nexcept ImportError:\n    pass\n" > /usr/local/lib/python3.12/site-packages/sitecustomize.py
 
 # 6. 作業用ボリュームディレクトリの作成と権限移譲
 RUN mkdir -p /mnt/data && chown sandboxuser:sandboxuser /mnt/data
