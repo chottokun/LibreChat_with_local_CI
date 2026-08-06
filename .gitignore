@@ -25,3 +25,9 @@ test_upload.txt
 root.crt
 *.crt
 
+# Coverage and test artifacts
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+
