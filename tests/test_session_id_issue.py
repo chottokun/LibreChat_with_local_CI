@@ -38,7 +38,7 @@ def test_session_id_mapping_consistency(mock_docker):
 
     headers = {"X-API-Key": API_KEY}
 
-    # 1. Test /upload with a new session ID
+    # 1. Test /upload with a non-21-char session ID
     test_sid_upload = "test-session-upload"
     files = [("files", ("test.txt", b"hello", "text/plain"))]
     response_upload = client.post(
@@ -48,10 +48,11 @@ def test_session_id_mapping_consistency(mock_docker):
         headers=headers
     )
     assert response_upload.status_code == 200
-    # In /upload, it should respect the provided sid if it's the first time seeing it
-    assert response_upload.json()["session_id"] == test_sid_upload
+    returned_sid_upload = response_upload.json()["session_id"]
+    # Guaranteed to be a 21-char Nanoid
+    assert len(returned_sid_upload) == 21
 
-    # 2. Test /exec with a new session ID (using spaces to verify respect for provided ID)
+    # 2. Test /exec with another non-21-char session ID (using spaces to verify sanitization and nanoid translation)
     test_sid_exec = "test session exec"
     response_exec = client.post(
         "/exec",
@@ -62,12 +63,19 @@ def test_session_id_mapping_consistency(mock_docker):
         headers=headers
     )
     assert response_exec.status_code == 200
-    returned_sid = response_exec.json()["session_id"]
+    returned_sid_exec = response_exec.json()["session_id"]
 
-    print(f"Provided SID for /exec: {test_sid_exec}")
-    print(f"Returned SID from /exec: {returned_sid}")
+    # Guaranteed to be a 21-char Nanoid
+    assert len(returned_sid_exec) == 21
 
-    assert returned_sid == test_sid_exec, "Now /exec should respect provided SID for new sessions"
+    # Verify that the mapped UUID is resolved consistently when the resolved nanoid is provided
+    # (Checking that resolved_download_ids maps returned_sid_exec and returned_sid_upload correctly)
+    real_sid_up, filename_up = kernel_manager.resolve_download_ids(returned_sid_upload, "test.txt")
+    assert filename_up == "test.txt"
+    assert real_sid_up != returned_sid_upload # resolved to internal uuid
+
+    real_sid_ex, _ = kernel_manager.resolve_download_ids(returned_sid_exec, "dummy")
+    assert real_sid_ex != returned_sid_exec
 
 if __name__ == "__main__":
     pytest.main([__file__])

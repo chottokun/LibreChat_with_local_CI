@@ -48,8 +48,9 @@ def test_session_id_mapping_consistency(mock_docker):
         headers=headers
     )
     assert response_upload.status_code == 200
-    # In /upload, it should respect the provided sid if it's the first time seeing it
-    assert response_upload.json()["session_id"] == test_sid_upload
+    # In /upload, it should map the provided sid to a 21-character Nanoid
+    returned_sid_upload = response_upload.json()["session_id"]
+    assert len(returned_sid_upload) == 21
 
     # 2. Test /exec with a new session ID
     test_sid_exec = "test-session-exec"
@@ -62,12 +63,9 @@ def test_session_id_mapping_consistency(mock_docker):
         headers=headers
     )
     assert response_exec.status_code == 200
-    returned_sid = response_exec.json()["session_id"]
+    returned_sid_exec = response_exec.json()["session_id"]
 
-    print(f"Provided SID for /exec: {test_sid_exec}")
-    print(f"Returned SID from /exec: {returned_sid}")
-
-    assert returned_sid == test_sid_exec, "Now /exec should respect provided SID for new sessions"
+    assert len(returned_sid_exec) == 21, "Now /exec should map any provided SID to a 21-character Nanoid"
 
 if __name__ == "__main__":
     pytest.main([__file__])

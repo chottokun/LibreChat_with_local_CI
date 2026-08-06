@@ -52,13 +52,13 @@ def test_upload_success_session_id_field():
         response = client.post(
             "/upload",
             headers={"X-API-Key": API_KEY},
-            data={"session_id": "session-123"},
+            data={"session_id": "session-1234567890123"}, # Exactly 21 characters
             files=[("file", ("file1.txt", b"data1"))]
         )
 
         assert response.status_code == 200
         data = response.json()
-        assert data["session_id"] == "session-123"
+        assert data["session_id"] == "session-1234567890123"
 
         assert len(data["files"]) == 1
         assert data["filename"] == "file1.txt"
@@ -67,13 +67,13 @@ def test_upload_success_session_id_field():
 def test_upload_success_query_param():
     with patch.object(kernel_manager, 'upload_files_batch'):
         response = client.post(
-            "/upload?session_id=query-session",
+            "/upload?session_id=query-session-1234567", # Exactly 21 characters
             headers={"X-API-Key": API_KEY},
             files=[("files", ("q.txt", b"q-data"))]
         )
 
         assert response.status_code == 200
-        assert response.json()["session_id"] == "query-session"
+        assert response.json()["session_id"] == "query-session-1234567"
 
 def test_upload_no_session_id_generates_one():
     with patch.object(kernel_manager, 'upload_files_batch'):
