@@ -67,9 +67,9 @@ def test_resolve_download_ids_sanitization(km):
     assert real_file == "real-file.txt"
 
 def test_resolve_download_ids_os_basename_on_result(km):
-    """Verify that the final filename is also passed through os.path.basename."""
+    """Verify that the final filename is normalized for relative path."""
     km.nanoid_to_session["s"] = "rs"
-    km.file_id_map["s"] = {"f": "/absolute/path/to/real-file.txt"}
+    km.file_id_map["s"] = {"f": "sub/path/to/real-file.txt"}
 
     _, real_file = km.resolve_download_ids("s", "f")
-    assert real_file == "real-file.txt"
+    assert real_file == "sub/path/to/real-file.txt"

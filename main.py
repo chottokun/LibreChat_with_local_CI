@@ -393,7 +393,11 @@ class KernelManager:
             if nanoid_session in self.file_id_map and s_filename in self.file_id_map[nanoid_session]:
                 real_filename = self.file_id_map[nanoid_session][s_filename]
 
-            return real_session_id, os.path.basename(real_filename)
+            # Normalize relative path while preventing path traversal
+            norm_filename = os.path.normpath(real_filename).lstrip("/")
+            if ".." in norm_filename.split(os.sep):
+                norm_filename = os.path.basename(real_filename)
+            return real_session_id, norm_filename
 
     def get_or_create_container(self, session_id: str, force_refresh: bool = False, external_session_id: Optional[str] = None):
         # Fast path: check if session exists and is not being refreshed
@@ -772,13 +776,24 @@ class KernelManager:
         if not safe_sid:
             raise HTTPException(status_code=400, detail="Invalid session ID")
 
-        safe_filename = os.path.basename(filename)
-        if not safe_filename:
+        if not filename or not filename.strip():
+            raise HTTPException(status_code=400, detail="Invalid filename")
+
+        # Normalize filename path while blocking path traversal
+        norm_filename = os.path.normpath(filename).lstrip("/")
+        if ".." in norm_filename.split(os.sep) or not norm_filename or norm_filename == ".":
             raise HTTPException(status_code=400, detail="Invalid filename")
 
         if RCE_DATA_DIR_HOST:
             session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, safe_sid)
-            filepath = os.path.join(session_dir, safe_filename)
+            filepath = os.path.join(session_dir, norm_filename)
+            
+            # Security check: ensure path is inside session_dir
+            abs_session = os.path.realpath(session_dir)
+            abs_file = os.path.realpath(filepath)
+            if os.path.commonpath([abs_session, abs_file]) != abs_session:
+                raise HTTPException(status_code=403, detail="Forbidden")
+
             if os.path.exists(filepath):
                 with open(filepath, "rb") as f:
                     content = f.read()
@@ -789,12 +804,11 @@ class KernelManager:
             container = self.get_or_create_container(safe_sid)
             try:
                 # get_archive returns a tuple: (stream, stat)
-                bits, stat = container.get_archive(f"/mnt/data/{safe_filename}")
+                bits, stat = container.get_archive(f"/mnt/data/{norm_filename}")
 
                 # Extract from tar bits
                 tar_stream = io.BytesIO(b"".join(bits))
                 with tarfile.open(fileobj=tar_stream, mode='r') as tar:
-                    # Use the first member from the tar archive for robustness
                     members = tar.getmembers()
                     if not members:
                         raise FileNotFoundError()
@@ -810,9 +824,20 @@ class KernelManager:
 
     def list_files(self, session_id: str, external_session_id: Optional[str] = None):
         container = self.get_or_create_container(session_id, external_session_id=external_session_id)
-        # Use python to list files to avoid locale-dependent 'ls' formatting/escaping issues.
-        # We use JSON for robust transmission of filenames that might contain spaces or special chars.
-        cmd = ["python3", "-c", "import os, json; print(json.dumps(os.listdir('/mnt/data')))"]
+        # Use python os.walk to recursively list files in /mnt/data, excluding hidden folders/files.
+        cmd = [
+            "python3", "-c",
+            "import os, json; "
+            "res = []; "
+            "base = '/mnt/data'; "
+            "for root, dirs, files in os.walk(base): "
+            "    dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ('__pycache__', 'node_modules', '.venv')]; "
+            "    for f in files: "
+            "        if not f.startswith('.'): "
+            "            rel = os.path.relpath(os.path.join(root, f), base); "
+            "            res.append(rel); "
+            "print(json.dumps(res))"
+        ]
 
         try:
             res = container.exec_run(cmd=cmd, demux=True)
@@ -828,7 +853,6 @@ class KernelManager:
                 return [f for f in files if f]
             except Exception as e:
                 logger.error("Failed to parse file list JSON from container: %s. Raw output: %s", e, output)
-                # Fallback to simple split if JSON fails
                 files = output.splitlines()
                 return [f for f in files if f]
         return []
