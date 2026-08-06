@@ -49,7 +49,13 @@ def test_exec_fallback_to_last_upload():
                 )
 
                 assert response.status_code == 200
-                assert response.json()["session_id"] == session_id
+                returned_sid = response.json()["session_id"]
+                assert len(returned_sid) == 21
+
+                # Check they resolve to the same real UUID
+                real_sid_1, _ = kernel_manager.get_or_create_session_mapping(session_id)
+                real_sid_2, _ = kernel_manager.get_or_create_session_mapping(returned_sid)
+                assert real_sid_1 == real_sid_2
                 mock_exec.assert_called_once()
 
 def test_upload_multiple_files_one_invalid():
@@ -85,7 +91,8 @@ def test_upload_special_characters_session_id_mapping():
             files=[("files", ("test.txt", b"content"))]
         )
         assert response.status_code == 200
-        assert response.json()["session_id"] == special_sid
+        returned_sid = response.json()["session_id"]
+        assert len(returned_sid) == 21
 
         # Verify internal sanitization and UUID mapping
         mock_upload.assert_called_once()
@@ -97,7 +104,7 @@ def test_upload_special_characters_session_id_mapping():
         sanitized_sid = main.sanitize_id(special_sid)
         with kernel_manager.lock:
             assert kernel_manager.nanoid_to_session[sanitized_sid] == real_sid
-            assert kernel_manager.session_to_nanoid[real_sid] == sanitized_sid
+            assert kernel_manager.session_to_nanoid[real_sid] == returned_sid
 
 
 def test_upload_parallel_no_session_id_reuses_same_session():

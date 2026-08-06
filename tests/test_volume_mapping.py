@@ -68,18 +68,18 @@ def test_session_id_resolution_flow():
             client = TestClient(main.app)
 
             # 1. First execution creates a mapping
-            # NEW: If we provide "uuid-1", it's treated as a nanoid and mapped to a new UUID internal session
+            # NEW: If we provide "uuid-1-12345678901234" (exactly 21 chars), it is accepted as the nanoid session id
             resp1 = client.post(
                 "/exec",
                 headers={"X-API-Key": main.API_KEY},
-                json={"code": "print(1)", "session_id": "uuid-1"}
+                json={"code": "print(1)", "session_id": "uuid-1-12345678901234"}
             )
             nanoid = resp1.json()["session_id"]
-            assert nanoid == "uuid-1"
+            assert nanoid == "uuid-1-12345678901234"
             internal_uuid = real_km.nanoid_to_session[nanoid]
-            assert internal_uuid != "uuid-1"
+            assert internal_uuid != "uuid-1-12345678901234"
             assert real_km.session_to_nanoid[internal_uuid] == nanoid
-            mock_exec.assert_called_with(internal_uuid, "print(1)", lang="py", external_session_id="uuid-1")
+            mock_exec.assert_called_with(internal_uuid, "print(1)", lang="py", external_session_id="uuid-1-12345678901234")
 
             # 2. Second execution using nanoid should resolve to same internal UUID
             resp2 = client.post(
@@ -88,7 +88,7 @@ def test_session_id_resolution_flow():
                 json={"code": "print(2)", "session_id": nanoid}
             )
             assert resp2.json()["session_id"] == nanoid
-            mock_exec.assert_called_with(internal_uuid, "print(2)", lang="py", external_session_id="uuid-1")
+            mock_exec.assert_called_with(internal_uuid, "print(2)", lang="py", external_session_id="uuid-1-12345678901234")
 
             # 3. Upload using nanoid should resolve to same internal UUID
             with patch.object(real_km, 'upload_files_batch') as mock_upload:
@@ -99,4 +99,4 @@ def test_session_id_resolution_flow():
                     files={"files": ("file.txt", b"data")}
                 )
                 assert resp3.status_code == 200
-                mock_upload.assert_called_once_with(internal_uuid, [("file.txt", b"data")], external_session_id="uuid-1")
+                mock_upload.assert_called_once_with(internal_uuid, [("file.txt", b"data")], external_session_id="uuid-1-12345678901234")
