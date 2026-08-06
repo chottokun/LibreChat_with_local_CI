@@ -17,22 +17,35 @@ LibreChatのエージェントおよびツール連携パッケージ（`@librec
 
 ---
 
-## 2. API側（`main.py`）の自動フォールバック設計
+## 2. API側（`main.py`）の自動フォールバック設計と21文字Nanoid検証保証
 
-本APIは、上流側のこの制約をカバーし、完全に意識させない状態でステートフルかつ高速な実行環境を提供するために、以下の**3重の自動フォールバック機構**を内蔵しています。
+本APIは、上流側のこの制約をカバーし、完全に意識させない状態でステートフルかつ高速な実行環境を提供するために、以下の**3重の自動フォールバック機構**に加えて、**「21文字Nanoid保証マッピング」**を内蔵しています。
 
 ```mermaid
 graph TD
-    Request[execリクエスト到達] --> CheckSID{session_idは存在するか?}
-    CheckSID -- Yes --> MapSID[リアルUUIDにデコードして実行]
+    Request[exec/uploadリクエスト到達] --> CheckSID{session_idは存在するか?}
+    CheckSID -- Yes --> CheckLen{長さは21文字かつ有効か?}
+    CheckLen -- Yes --> MapSID[リアルUUIDにデコードして実行]
+    CheckLen -- No --> GenCompliant[新しく21文字Nanoidを生成し、同じUUIDに紐付け]
     CheckSID -- No --> CheckFiles{files配列はあるか?}
     CheckFiles -- Yes --> ExtFiles[添付ファイルメタデータから救出]
     CheckFiles -- No --> CheckUID{user_idはあるか?}
-    CheckUID -- Yes --> BindUID[user_user_id に強制バインド]
+    CheckUID -- Yes --> BindUID[user_user_id を21字Nanoidに変換してバインド]
     CheckUID -- No --> CheckCache{5分以内にアップロード実績あり?}
-    CheckCache -- Yes --> UseCache[直前アップロードIDを再利用]
+    CheckCache -- Yes --> UseCache[直前アップロードの21字Nanoidを再利用]
     CheckCache -- No --> GenNew[新規NanoIDを生成]
 ```
+
+### 【超重要】 LibreChatバックエンドの `isValidID` フィルターと21文字Nanoid保証
+LibreChatのバックエンドは、生成・アップロードされたファイルのダウンロードやプレビューを行う際、内部の `isValidID()` 判定ロジックにより、セッションIDおよびファイルIDに対して以下の正規表現バリデーションを厳格に実行します。
+```javascript
+/^[A-Za-z0-9_-]{21}$/
+```
+IDの長さが21文字でない場合、あるいは無効な文字種が含まれている場合、LibreChat側は `400 Bad Request` を返してダウンロードやインラインプレビューを強制遮断します。
+
+本APIでは、この仕様に対応するため、`KernelManager.get_or_create_session_mapping` の内部で、入力されたセッションIDの長さと文字種を自動判定し、非準拠の場合（例：ユーザーID `user_12345` や、一時的で不適合なセッションIDなど）は**自動的に21文字の暗号学的に安全なNanoidを生成し、同じ内部UUIDに双方向でマッピングしてレスポンスする設計**になっています。
+
+これにより、LibreChatのセキュリティ検証を100%パスさせつつ、同一チャットセッション内でのステートフルな再利用性を完全に両立させています。
 
 ### ① 添付ファイルメタデータからの救出
 ルートレベルの `session_id` が空であっても、`req.files` 配列の要素内に存在する `session_id` や `storage_session_id` を最優先で走査し、セッションIDを特定してマッピングします。
