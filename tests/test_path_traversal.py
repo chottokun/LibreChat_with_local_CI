@@ -33,15 +33,16 @@ def test_path_traversal_vulnerability(tmp_path):
             headers=headers
         )
         assert response.status_code == 200
+        returned_session_id = response.json()["session_id"]
         file_id = response.json()["files"][0]["fileId"]
         
         # Check the mapping directly
         with kernel_manager.lock:
-            stored_filename = kernel_manager.file_id_map.get(session_id, {}).get(file_id)
+            stored_filename = kernel_manager.file_id_map.get(returned_session_id, {}).get(file_id)
             print(f"Stored filename: {stored_filename}")
             
         # 2. Try to download the file using the returned file_id
-        download_url = f"/download/{session_id}/{file_id}"
+        download_url = f"/download/{returned_session_id}/{file_id}"
         client.get(download_url, headers=headers)
         
         # The stored filename should be sanitized!

@@ -24,7 +24,7 @@ def test_thorough_lifecycle_integration():
     5. Robust file listing and download.
     """
     headers = {"X-API-Key": API_KEY}
-    nanoid = "thorough-test-nanoid"
+    nanoid = "thorough-test-nanoid_" # Exactly 21 characters
     filename1 = "data.csv"
     filename2 = "script.py"
 
@@ -143,7 +143,7 @@ def test_thorough_lifecycle_integration():
 def test_parallel_upload_consistency():
     """Verifies that parallel uploads don't cause race conditions in mapping."""
     headers = {"X-API-Key": API_KEY}
-    nanoid = "race-test-id"
+    nanoid = "race-test-id-12345678" # Exactly 21 characters
 
     with patch("main.DOCKER_CLIENT") as mock_docker:
         mock_container = MagicMock()

@@ -57,11 +57,12 @@ def test_session_mapping_helper_new_session():
     
     # 双方向マッピングの検証
     assert real_uuid != nanoid
-    assert resolved_nanoid == nanoid
+    assert len(resolved_nanoid) == 21
     
     with kernel_manager.lock:
         assert kernel_manager.nanoid_to_session[nanoid] == real_uuid
-        assert kernel_manager.session_to_nanoid[real_uuid] == nanoid
+        assert kernel_manager.nanoid_to_session[resolved_nanoid] == real_uuid
+        assert kernel_manager.session_to_nanoid[real_uuid] == resolved_nanoid
 
 def test_session_mapping_helper_existing_session():
     """既存のセッションマッピングが正しく解決されることを検証。"""
@@ -75,6 +76,7 @@ def test_session_mapping_helper_existing_session():
     
     assert real_uuid == real_uuid_2
     assert resolved_nanoid == resolved_nanoid_2
+    assert len(resolved_nanoid_2) == 21
 
 def test_librechat_session_id_omission_bug_fix():
     """LibreChatクライアント側でsession_idが欠落したバグに対し、user_idからセッションIDをフォールバック再利用するロジックを検証。"""
@@ -101,6 +103,11 @@ def test_librechat_session_id_omission_bug_fix():
         )
         assert response.status_code == 200
         
-        # 戻り値の session_id が "user_12345" になっていることを検証
+        # 戻り値の session_id が 21文字のNanoidにマッピングされていることを検証
         returned_session_id = response.json()["session_id"]
-        assert returned_session_id == f"user_{test_user_id}"
+        assert len(returned_session_id) == 21
+
+        # その戻り値が user_12345 からマップされた internal UUID の nanoid 表現であることを検証
+        real_sid, _ = kernel_manager.get_or_create_session_mapping(f"user_{test_user_id}")
+        real_sid_from_returned, _ = kernel_manager.get_or_create_session_mapping(returned_session_id)
+        assert real_sid == real_sid_from_returned
