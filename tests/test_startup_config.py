@@ -26,15 +26,15 @@ def reset_env():
         main.kernel_manager = orig_km
 
 def test_makedirs_exception_fallback(caplog):
-    """Test that RCE_DATA_DIR_HOST falls back to None if os.makedirs raises an exception."""
+    """Test that RCE_DATA_DIR_HOST falls back to None if Path.mkdir raises an exception."""
     caplog.set_level(logging.WARNING)
     with patch.dict(os.environ, {
         "RCE_DATA_DIR_HOST": "/host/path",
         "LIBRECHAT_CODE_API_KEY": "test-key",
         "RCE_DATA_DIR_INTERNAL": "/internal/path"
-    }), patch("os.makedirs") as mock_makedirs:
+    }), patch("pathlib.Path.mkdir") as mock_mkdir:
 
-        mock_makedirs.side_effect = Exception("Permission denied")
+        mock_mkdir.side_effect = Exception("Permission denied")
 
         importlib.reload(main)
 
@@ -48,7 +48,7 @@ def test_permission_error_fallback(caplog):
         "RCE_DATA_DIR_HOST": "/host/path",
         "LIBRECHAT_CODE_API_KEY": "test-key",
         "RCE_DATA_DIR_INTERNAL": "/internal/path"
-    }), patch("os.makedirs"), \
+    }), patch("pathlib.Path.mkdir"), \
         patch("os.access") as mock_access:
 
         mock_access.return_value = False
@@ -66,7 +66,7 @@ def test_happy_path_initialization(caplog):
         "RCE_DATA_DIR_HOST": "/host/path",
         "LIBRECHAT_CODE_API_KEY": "test-key",
         "RCE_DATA_DIR_INTERNAL": "/internal/path"
-    }), patch("os.makedirs"), \
+    }), patch("pathlib.Path.mkdir"), \
         patch("os.access") as mock_access:
 
         mock_access.return_value = True

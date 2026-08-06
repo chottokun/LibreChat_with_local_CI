@@ -4,6 +4,7 @@ import weakref
 import tarfile
 import logging
 import os
+from pathlib import Path
 import uuid
 import docker
 import threading
@@ -49,7 +50,7 @@ if not DISABLE_AUTH and not API_KEY:
 # RCE_DATA_DIR_HOST is the path on the Docker Host (used for mounting)
 _raw_data_dir = os.environ.get("RCE_DATA_DIR_HOST", os.environ.get("RCE_DATA_DIR", ""))
 # RCE_DATA_DIR_INTERNAL is the path inside this API container (used for writing files)
-RCE_DATA_DIR_INTERNAL = os.environ.get("RCE_DATA_DIR_INTERNAL", "/app/shared_volumes/sessions")
+RCE_DATA_DIR_INTERNAL = Path(os.environ.get("RCE_DATA_DIR_INTERNAL", "/app/shared_volumes/sessions"))
 
 # 1. Validation for RCE_DATA_DIR
 if not _raw_data_dir or "absolute/path/to/your/project/sessions" in _raw_data_dir:
@@ -63,7 +64,7 @@ else:
 # 2. Writability check for shared volume
 if RCE_DATA_DIR_HOST:
     try:
-        os.makedirs(RCE_DATA_DIR_INTERNAL, exist_ok=True)
+        RCE_DATA_DIR_INTERNAL.mkdir(parents=True, exist_ok=True)
         if not os.access(RCE_DATA_DIR_INTERNAL, os.W_OK):
             logger.warning("!!! PERMISSION ERROR !!!")
             logger.warning(f"RCE_DATA_DIR is set to '{RCE_DATA_DIR_HOST}', but the internal path '{RCE_DATA_DIR_INTERNAL}' is not writable.")
@@ -379,7 +380,7 @@ class KernelManager:
         s_session_id = sanitize_id(session_id)
         if not s_session_id:
             raise HTTPException(status_code=400, detail="Invalid session ID")
-        s_filename = os.path.basename(filename)
+        s_filename = Path(filename).name
 
         with self.lock:
             if s_session_id in self.nanoid_to_session:
@@ -394,9 +395,11 @@ class KernelManager:
                 real_filename = self.file_id_map[nanoid_session][s_filename]
 
             # Normalize relative path while preventing path traversal
-            norm_filename = os.path.normpath(real_filename).lstrip("/")
-            if ".." in norm_filename.split(os.sep):
-                norm_filename = os.path.basename(real_filename)
+            path_obj = Path(real_filename)
+            if ".." in path_obj.parts or path_obj.is_absolute():
+                norm_filename = path_obj.name
+            else:
+                norm_filename = str(path_obj).lstrip("/")
             return real_session_id, norm_filename
 
     def get_or_create_container(self, session_id: str, force_refresh: bool = False, external_session_id: Optional[str] = None):
@@ -545,9 +548,9 @@ class KernelManager:
             raise HTTPException(status_code=400, detail="Invalid session ID")
 
         # Use HOST path for Docker mounting, but ensure INTERNAL path exists for writing
-        session_dir_host = os.path.join(RCE_DATA_DIR_HOST, safe_sid)
-        session_dir_internal = os.path.join(RCE_DATA_DIR_INTERNAL, safe_sid)
-        os.makedirs(session_dir_internal, exist_ok=True)
+        session_dir_host = str(Path(RCE_DATA_DIR_HOST) / safe_sid)
+        session_dir_internal = Path(RCE_DATA_DIR_INTERNAL) / safe_sid
+        session_dir_internal.mkdir(parents=True, exist_ok=True)
 
         return {session_dir_host: {'bind': '/mnt/data', 'mode': 'rw'}}
 
@@ -592,8 +595,8 @@ class KernelManager:
                 if not safe_sid:
                      logger.warning("Attempted to cleanup session with invalid ID: %s", session_id)
                      return
-                session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, safe_sid)
-                if os.path.exists(session_dir):
+                session_dir = Path(RCE_DATA_DIR_INTERNAL) / safe_sid
+                if session_dir.exists():
                     shutil.rmtree(session_dir, ignore_errors=True)
 
             if data:
@@ -673,16 +676,16 @@ class KernelManager:
         if not safe_sid:
             raise HTTPException(status_code=400, detail="Invalid session ID")
 
-        safe_filename = os.path.basename(filename)
+        safe_filename = Path(filename).name
         if not safe_filename:
             raise HTTPException(status_code=400, detail="Invalid filename")
 
         try:
             if RCE_DATA_DIR_HOST:
-                session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, safe_sid)
-                os.makedirs(session_dir, exist_ok=True)
-                with open(os.path.join(session_dir, safe_filename), "wb") as f:
-                    f.write(content)
+                session_dir = Path(RCE_DATA_DIR_INTERNAL) / safe_sid
+                session_dir.mkdir(parents=True, exist_ok=True)
+                filepath = session_dir / safe_filename
+                filepath.write_bytes(content)
                 logger.info("Uploaded file %s to volume (internal: %s) for session %s", safe_filename, session_dir, safe_sid)
                 # Ensure container exists (even if it doesn't need to do anything now)
                 self.get_or_create_container(safe_sid, external_session_id=external_session_id)
@@ -717,14 +720,13 @@ class KernelManager:
 
         try:
             if RCE_DATA_DIR_HOST:
-                session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, safe_sid)
-                os.makedirs(session_dir, exist_ok=True)
+                session_dir = Path(RCE_DATA_DIR_INTERNAL) / safe_sid
+                session_dir.mkdir(parents=True, exist_ok=True)
                 for filename, content in files:
-                    safe_filename = os.path.basename(filename)
+                    safe_filename = Path(filename).name
                     if not safe_filename:
                         continue
-                    with open(os.path.join(session_dir, safe_filename), "wb") as f:
-                        f.write(content)
+                    (session_dir / safe_filename).write_bytes(content)
                 logger.info("Uploaded %d files to volume for session %s", len(files), safe_sid)
                 self.get_or_create_container(safe_sid, external_session_id=external_session_id)
             else:
@@ -732,7 +734,7 @@ class KernelManager:
                 tar_stream = io.BytesIO()
                 with tarfile.open(fileobj=tar_stream, mode='w') as tar:
                     for filename, content in files:
-                        safe_filename = os.path.basename(filename)
+                        safe_filename = Path(filename).name
                         if not safe_filename:
                             continue
                         tar_info = tarfile.TarInfo(name=safe_filename)
@@ -780,24 +782,27 @@ class KernelManager:
             raise HTTPException(status_code=400, detail="Invalid filename")
 
         # Normalize filename path while blocking path traversal
-        norm_filename = os.path.normpath(filename).lstrip("/")
-        if ".." in norm_filename.split(os.sep) or not norm_filename or norm_filename == ".":
+        path_obj = Path(filename)
+        if ".." in path_obj.parts or path_obj.is_absolute():
+            raise HTTPException(status_code=400, detail="Invalid filename")
+
+        norm_filename = str(path_obj).lstrip("/")
+        if not norm_filename or norm_filename == ".":
             raise HTTPException(status_code=400, detail="Invalid filename")
 
         if RCE_DATA_DIR_HOST:
-            session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, safe_sid)
-            filepath = os.path.join(session_dir, norm_filename)
+            session_dir = Path(RCE_DATA_DIR_INTERNAL) / safe_sid
+            filepath = session_dir / norm_filename
             
             # Security check: ensure path is inside session_dir
-            abs_session = os.path.realpath(session_dir)
-            abs_file = os.path.realpath(filepath)
-            if os.path.commonpath([abs_session, abs_file]) != abs_session:
+            abs_session = session_dir.resolve()
+            abs_file = filepath.resolve()
+            if not abs_file.is_relative_to(abs_session):
                 raise HTTPException(status_code=403, detail="Forbidden")
 
-            if os.path.exists(filepath):
-                with open(filepath, "rb") as f:
-                    content = f.read()
-                mtime = os.path.getmtime(filepath)
+            if filepath.exists():
+                content = filepath.read_bytes()
+                mtime = filepath.stat().st_mtime
                 return content, mtime
             raise FileNotFoundError()
         else:
@@ -1143,7 +1148,7 @@ async def upload_files(
             content = await f.read()
             if not content:
                 raise HTTPException(status_code=400, detail="File content is empty")
-            safe_filename = os.path.basename(f.filename)
+            safe_filename = Path(f.filename).name
             if not safe_filename:
                 raise HTTPException(status_code=400, detail="Invalid filename")
             return safe_filename, content
@@ -1214,7 +1219,7 @@ async def list_session_files(session_id: str, key: str = Security(get_api_key)):
 def get_download_meta(real_filename: str) -> Tuple[str, Dict[str, str]]:
     """Determines MIME type and constructs headers for file download."""
     # Guess MIME type
-    if real_filename.lower().endswith(".csv"):
+    if Path(real_filename).suffix.lower() == ".csv":
         mime_type = "text/plain"  # Force text/plain to allow inline display and bypass Chrome's HTTP download security block
     else:
         mime_type, _ = mimetypes.guess_type(real_filename)
@@ -1271,20 +1276,20 @@ async def download_session_file(
     in_memory_content = None
     try:
         if RCE_DATA_DIR_HOST:
-            session_dir = os.path.join(RCE_DATA_DIR_INTERNAL, real_session_id)
-            filepath = os.path.join(session_dir, real_filename)
+            session_dir = Path(RCE_DATA_DIR_INTERNAL) / real_session_id
+            filepath = session_dir / real_filename
 
             # Security: Ensure the path is within the designated data directory
             # and that real_session_id is not empty (already handled by resolve_download_ids but good to be safe)
-            abs_base = os.path.realpath(RCE_DATA_DIR_INTERNAL)
-            abs_file = os.path.realpath(filepath)
-            if os.path.commonpath([abs_base, abs_file]) != abs_base or not real_session_id:
+            abs_base = Path(RCE_DATA_DIR_INTERNAL).resolve()
+            abs_file = filepath.resolve()
+            if not abs_file.is_relative_to(abs_base) or not real_session_id:
                 logger.warning("Path traversal attempt blocked: %s", filepath)
                 raise HTTPException(status_code=403, detail="Forbidden")
 
-            if not os.path.exists(filepath):
+            if not filepath.exists():
                  raise HTTPException(status_code=404, detail="File not found")
-            tmp_filepath = filepath
+            tmp_filepath = str(filepath)
         else:
             # Fallback to Docker API (get_archive)
             in_memory_content, mtime = await asyncio.to_thread(kernel_manager.download_file, real_session_id, real_filename)
