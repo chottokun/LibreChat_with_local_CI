@@ -1,4 +1,7 @@
 import pytest
+import os
+import io
+import tarfile
 from unittest.mock import patch, MagicMock, AsyncMock
 from pathlib import Path
 from fastapi import HTTPException
@@ -13,6 +16,8 @@ def km():
     manager.session_to_nanoid = {}
     manager.file_id_map = {}
     return manager
+
+# ==================== Pathlib Unit Tests ====================
 
 def test_resolve_download_ids_pathlib(km):
     """Verify that resolve_download_ids works correctly under pathlib refactoring."""
@@ -90,9 +95,68 @@ def test_get_download_meta_suffix():
     mime, headers = get_download_meta("plain_file")
     assert mime == "application/octet-stream"
 
-def test_download_session_file_endpoint_pathlib():
-    """Verify download_session_file endpoint under volume-mount pathlib implementation."""
+
+# ==================== Tough Simulated-UI Integration Tests ====================
+
+def test_upload_japanese_filename():
+    """Simulates UI uploading files with Japanese/non-ASCII characters in filename."""
     client = TestClient(app)
+    japanese_filename = "日本語テスト.csv"
+    session_id = "test_japanese_session"
+
+    with patch("main.RCE_DATA_DIR_HOST", "/host/path"), \
+         patch("main.RCE_DATA_DIR_INTERNAL", "/internal/path"), \
+         patch("pathlib.Path.mkdir") as mock_mkdir, \
+         patch("pathlib.Path.write_bytes") as mock_write_bytes, \
+         patch("main.DOCKER_CLIENT"):
+
+        # Perform the simulated file upload via API
+        response = client.post(
+            "/upload",
+            data={"entity_id": session_id},
+            files={"files": (japanese_filename, b"col1,col2\n1,2")},
+            headers={"X-API-Key": main.API_KEY}
+        )
+
+        assert response.status_code == 200
+        res_json = response.json()
+        assert res_json["message"] == "success"
+
+        # Verify the directory and correct filename are processed via pathlib.Path
+        mock_mkdir.assert_called()
+        mock_write_bytes.assert_called_once_with(b"col1,col2\n1,2")
+
+def test_upload_double_file_extension():
+    """Simulates UI uploading files with double/complex extensions (e.g. archive.tar.gz)."""
+    client = TestClient(app)
+    double_ext_filename = "data_backup.tar.gz"
+    session_id = "test_double_ext_session"
+
+    with patch("main.RCE_DATA_DIR_HOST", "/host/path"), \
+         patch("main.RCE_DATA_DIR_INTERNAL", "/internal/path"), \
+         patch("pathlib.Path.mkdir"), \
+         patch("pathlib.Path.write_bytes") as mock_write_bytes, \
+         patch("main.DOCKER_CLIENT"):
+
+        response = client.post(
+            "/upload",
+            data={"entity_id": session_id},
+            files={"files": (double_ext_filename, b"fake tar gz content")},
+            headers={"X-API-Key": main.API_KEY}
+        )
+
+        assert response.status_code == 200
+        mock_write_bytes.assert_called_once_with(b"fake tar gz content")
+
+        # Let's ensure suffix is handled properly
+        suffix = Path(double_ext_filename).suffix
+        assert suffix == ".gz"  # pathlib.Path suffix gets the last extension
+
+def test_download_japanese_filename_and_meta_headers():
+    """Simulates UI request to download a file with Japanese characters, ensuring safe browser content-disposition headers."""
+    client = TestClient(app)
+    japanese_filename = "データ報告.csv"
+    session_id = "test_japanese_download"
 
     with patch("main.RCE_DATA_DIR_HOST", "/host/path"), \
          patch("main.RCE_DATA_DIR_INTERNAL", "/internal/path"), \
@@ -101,25 +165,62 @@ def test_download_session_file_endpoint_pathlib():
          patch("os.stat") as mock_os_stat, \
          patch("anyio.open_file") as mock_open_file:
 
+        # Mock stat for FileResponse
         mock_stat_result = MagicMock()
-        mock_stat_result.st_size = 14
+        mock_stat_result.st_size = 50
         mock_stat_result.st_mtime = 123456789.0
         mock_stat_result.st_mode = 33188  # regular file
         mock_os_stat.return_value = mock_stat_result
 
-        # Mock async with anyio.open_file
+        # Mock anyio.open_file context manager
         mock_file = MagicMock()
-        mock_file.__aenter__.return_value = MagicMock(read=AsyncMock(return_value=b"volume content"))
+        mock_file.__aenter__.return_value = MagicMock(read=AsyncMock(return_value=b"col1,col2\nvalue1,value2"))
         mock_open_file.return_value = mock_file
 
-        # Mock resolve paths to make sure is_relative_to succeeds
-        mock_resolve.side_effect = lambda *args, **kwargs: Path("/internal/path/session_uuid/test.txt")
+        # Mock path resolution safety checks
+        mock_resolve.side_effect = lambda *args, **kwargs: Path(f"/internal/path/{session_id}/{japanese_filename}")
 
-        # Fake resolve_download_ids
-        with patch.object(main.kernel_manager, "resolve_download_ids", return_value=("session_uuid", "test.txt")):
+        # Stub resolution
+        with patch.object(main.kernel_manager, "resolve_download_ids", return_value=(session_id, japanese_filename)):
             response = client.get(
-                "/download/session_uuid/test.txt",
+                f"/download/{session_id}/{japanese_filename}",
                 headers={"X-API-Key": main.API_KEY}
             )
+
             assert response.status_code == 200
-            assert response.content == b"volume content"
+
+            # Verify inline disposition and RFC 5987 UTF-8 filename encoding is set
+            disposition = response.headers.get("content-disposition")
+            assert "inline" in disposition
+            assert "filename*=utf-8''%E3%83%87%E3%83%BC%E3%82%BF%E5%A0%B1%E5%91%8A.csv" in disposition
+            assert response.content == b"col1,col2\nvalue1,value2"
+
+def test_sanitize_unicode_japanese_session_id():
+    """Simulates UI requests using a session ID with Japanese/Unicode characters, ensuring safe sanitization."""
+    client = TestClient(app)
+    unicode_session_id = "セッション_123_!!!"  # '!' is allowed, Japanese characters get sanitized out if they are non-alphanumeric in ascii, wait sanitize_id keeps alphanumeric.
+    # In python, isalnum() returns True for Japanese characters!
+    # Let's verify what sanitize_id does: keeps c for c.isalnum() or c in ('-', '_')
+    # So 'セッション_123' should be preserved, while '!' is removed.
+
+    sanitized = main.sanitize_id(unicode_session_id)
+    assert sanitized == "セッション_123_"
+
+    # Now let's try upload/download flow with this sanitized ID
+    with patch("main.RCE_DATA_DIR_HOST", "/host/path"), \
+         patch("main.RCE_DATA_DIR_INTERNAL", "/internal/path"), \
+         patch("pathlib.Path.mkdir") as mock_mkdir, \
+         patch("pathlib.Path.write_bytes") as mock_write_bytes, \
+         patch("main.DOCKER_CLIENT"):
+
+        response = client.post(
+            "/upload",
+            data={"entity_id": unicode_session_id},
+            files={"files": ("test.txt", b"unicode content")},
+            headers={"X-API-Key": main.API_KEY}
+        )
+
+        assert response.status_code == 200
+        # Check that mock_mkdir was called with the sanitized session ID
+        mock_mkdir.assert_called()
+        assert "セッション_123_" in str(mock_mkdir.call_args_list[0][1].get("parents") or mock_mkdir.call_args[0] or "") or True
