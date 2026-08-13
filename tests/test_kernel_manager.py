@@ -57,8 +57,8 @@ def test_get_or_create_container_running(kernel_manager):
 
     # Assert
     assert container == mock_container
-    main.DOCKER_CLIENT.containers.get.assert_not_called()
-    mock_container.reload.assert_not_called()
+    assert not main.DOCKER_CLIENT.containers.get.called
+    assert not mock_container.reload.called
 
 def test_get_or_create_container_stopped(kernel_manager):
     # Setup
@@ -75,8 +75,8 @@ def test_get_or_create_container_stopped(kernel_manager):
 
     # Assert
     assert container == mock_container
-    mock_container.reload.assert_called_once()
-    mock_container.start.assert_called_once()
+    assert mock_container.reload.call_count == 1
+    assert mock_container.start.call_count == 1
 
 def test_get_or_create_container_missing_during_reload(kernel_manager):
     # Setup
@@ -112,7 +112,7 @@ def test_start_new_container_success(kernel_manager):
 
     assert container == mock_container
     assert kernel_manager.active_kernels[session_id]["container"] == mock_container
-    main.DOCKER_CLIENT.containers.run.assert_called_once()
+    assert main.DOCKER_CLIENT.containers.run.call_count == 1
     args, kwargs = main.DOCKER_CLIENT.containers.run.call_args
     assert kwargs["environment"] == {"PYTHONUNBUFFERED": "1"}
 
@@ -179,7 +179,7 @@ def test_list_files_failure(kernel_manager):
     # Assert
     assert files == []
     kernel_manager.get_or_create_container.assert_called_once_with(session_id, external_session_id=None)
-    mock_container.exec_run.assert_called_once()
+    assert mock_container.exec_run.call_count == 1
 
 def test_recover_containers_success(kernel_manager):
     # Setup
@@ -476,7 +476,7 @@ def test_get_or_create_container_generic_exception_during_start(kernel_manager):
 
     # Assert
     assert container == new_container
-    mock_container.start.assert_called_once()
+    assert mock_container.start.call_count == 1
     kernel_manager.start_new_container.assert_called_once_with(session_id, None)
 
 def test_get_or_create_container_generic_exception_during_reload(kernel_manager):
@@ -507,7 +507,7 @@ def test_get_or_create_container_generic_exception_during_reload(kernel_manager)
 
     # Assert
     assert container == new_container
-    mock_container.reload.assert_called_once()
+    assert mock_container.reload.call_count == 1
     kernel_manager.start_new_container.assert_called_once_with(session_id, None)
 
 def test_recover_containers_with_external_id_success(kernel_manager):
