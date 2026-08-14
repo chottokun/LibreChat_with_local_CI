@@ -5,32 +5,33 @@ import yaml
 # パス定義
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DOCKER_COMPOSE_PATH = os.path.join(BASE_DIR, "docker-compose.librechat.yml")
-CADDYFILE_PATH = os.path.join(BASE_DIR, "Caddyfile")
+NGINX_CONF_PATH = os.path.join(BASE_DIR, "nginx.conf")
 
-def test_caddyfile_exists_and_configured():
+def test_nginx_conf_exists_and_configured():
     """
-    Caddyfile が存在し、LibreChat本体(443)とSandpack Bundler(8443)のリバースプロキシ設定が
-    tls internal (自己署名) 付きで正しく構成されているかを検証します。
+    nginx.conf が存在し、LibreChat本体(443)とSandpack Bundler(8443)のリバースプロキシ設定が
+    SSL 証明書付きで正しく構成されているかを検証します。
     """
-    assert os.path.exists(CADDYFILE_PATH), "Caddyfile がプロジェクトルートに存在しません。"
+    assert os.path.exists(NGINX_CONF_PATH), "nginx.conf がプロジェクトルートに存在しません。"
     
-    with open(CADDYFILE_PATH, "r", encoding="utf-8") as f:
+    with open(NGINX_CONF_PATH, "r", encoding="utf-8") as f:
         content = f.read()
         
-    # your-domain.local:443 と tls internal の設定確認
-    assert "your-domain.local:443" in content, "Caddyfile に your-domain.local:443 の定義がありません。"
-    assert "reverse_proxy librechat:3080" in content, "Caddyfile に librechat:3080 へのリバースプロキシ設定がありません。"
+    # ポート443 と LibreChat リバースプロキシ設定確認
+    assert "listen 443 ssl" in content, "nginx.conf に listen 443 ssl の定義がありません。"
+    assert "proxy_pass http://librechat:3080;" in content, "nginx.conf に librechat:3080 へのリバースプロキシ設定がありません。"
     
-    # your-domain.local:8443 と tls internal の設定確認
-    assert "your-domain.local:8443" in content, "Caddyfile に your-domain.local:8443 の定義がありません。"
-    assert "reverse_proxy sandpack-bundler:80" in content, "Caddyfile に sandpack-bundler:80 へのリバースプロキシ設定がありません。"
+    # ポート8443 と Sandpack Bundler 設定確認
+    assert "listen 8443 ssl" in content, "nginx.conf に listen 8443 ssl の定義がありません。"
+    assert "proxy_pass http://sandpack-bundler:80;" in content, "nginx.conf に sandpack-bundler:80 へのリバースプロキシ設定がありません。"
     
-    # tls 設定の存在確認 (自己署名、またはカスタムCAをサポートする形式)
-    assert "tls internal" in content, "Caddyfile 内にデフォルトの 'tls internal' 設定がありません。"
+    # SSL 証明書設定およびストリーミングバッファ無効化設定の存在確認
+    assert "ssl_certificate" in content, "nginx.conf に ssl_certificate 設定がありません。"
+    assert "proxy_buffering off;" in content, "nginx.conf にリアルタイムSSE用の proxy_buffering off 設定がありません。"
 
-def test_docker_compose_caddy_service():
+def test_docker_compose_nginx_service():
     """
-    docker-compose.librechat.yml 内に caddy サービスが定義され、
+    docker-compose.librechat.yml 内に nginx サービスが定義され、
     'ssl-mode' プロファイルで、ポート443と8443がマッピングされていることを検証します。
     """
     assert os.path.exists(DOCKER_COMPOSE_PATH)
@@ -39,48 +40,28 @@ def test_docker_compose_caddy_service():
         config = yaml.safe_load(f)
         
     services = config.get("services", {})
-    assert "caddy" in services, "docker-compose.librechat.yml に caddy サービスが定義されていません。"
+    assert "nginx" in services, "docker-compose.librechat.yml に nginx サービスが定義されていません。"
     
-    caddy_service = services["caddy"]
+    nginx_service = services["nginx"]
     
     # profiles に ssl-mode が含まれているか確認
-    profiles = caddy_service.get("profiles", [])
-    assert "ssl-mode" in profiles, "caddy サービスに 'ssl-mode' プロファイルが設定されていません。"
+    profiles = nginx_service.get("profiles", [])
+    assert "ssl-mode" in profiles, "nginx サービスに 'ssl-mode' プロファイルが設定されていません。"
     
     # ports の確認
-    ports = caddy_service.get("ports", [])
-    # Environment variable interpolation support (default values 443 and 8443)
-    # We check for the specific mappings with optional env var syntax
-    assert any(p == "443:443" or p == "${CADDY_HTTPS_PORT:-443}:443" for p in ports), "caddy サービスのポートに '443:443' (または変形式) が設定されていません。"
-    assert any(p == "8443:8443" or p == "${CADDY_SANDPACK_PORT:-8443}:8443" for p in ports), "caddy サービスのポートに '8443:8443' (または変形式) が設定されていません。"
+    ports = nginx_service.get("ports", [])
+    assert any(p == "443:443" or "${HTTPS_PORT:-443}:443" in p for p in ports), "nginx サービスのポートに 443 マッピングが設定されていません。"
+    assert any(p == "8443:8443" or "${SANDPACK_HTTPS_PORT:-8443}:8443" in p for p in ports), "nginx サービスのポートに 8443 マッピングが設定されていません。"
     
     # volumes の確認
-    volumes = caddy_service.get("volumes", [])
-    has_caddyfile_mount = False
-    has_data_volume = False
-    has_config_volume = False
+    volumes = nginx_service.get("volumes", [])
+    has_nginx_conf_mount = False
+    has_certs_mount = False
     for vol in volumes:
-        if "./Caddyfile:/etc/caddy/Caddyfile" in vol:
-            has_caddyfile_mount = True
-        if "caddy-data:/data" in vol:
-            has_data_volume = True
-        if "caddy-config:/config" in vol:
-            has_config_volume = True
+        if "./nginx.conf:/etc/nginx/nginx.conf:ro" in vol:
+            has_nginx_conf_mount = True
+        if "./certs:/etc/nginx/certs:ro" in vol:
+            has_certs_mount = True
             
-    assert has_caddyfile_mount, "Caddyfile のマウント設定が見つかりません。"
-    assert has_data_volume, "caddy-data ボリュームのマウント設定が見つかりません。"
-    assert has_config_volume, "caddy-config ボリュームのマウント設定が見つかりません。"
-
-def test_docker_compose_volumes_definition():
-    """
-    docker-compose.librechat.yml の最下部に caddy-data および caddy-config
-    のボリューム定義があることを検証します。
-    """
-    assert os.path.exists(DOCKER_COMPOSE_PATH)
-    
-    with open(DOCKER_COMPOSE_PATH, "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
-        
-    volumes = config.get("volumes", {})
-    assert "caddy-data" in volumes, "docker-compose.librechat.yml の volumes に caddy-data が定義されていません。"
-    assert "caddy-config" in volumes, "docker-compose.librechat.yml の volumes に caddy-config が定義されていません。"
+    assert has_nginx_conf_mount, "nginx.conf のマウント設定が見つかりません。"
+    assert has_certs_mount, "certs ディレクトリのマウント設定が見つかりません。"

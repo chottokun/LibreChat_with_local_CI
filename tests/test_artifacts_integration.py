@@ -40,33 +40,34 @@ def test_integration_docker_compose_syntax():
 def test_integration_phase1_profile_behavior():
     """
     B-1: 通常起動（プロファイル指定なし）時、
-    sandpack-bundler および caddy サービスが構成から除外される（休止される）ことを検証します。
+    sandpack-bundler および nginx サービスが構成から除外される（休止される）ことを検証します。
     """
     config = run_compose_config()
     services = config.get("services", {})
     
     # フェーズ1では、プロファイル指定なしで起動した場合、
-    # 'sandpack-bundler' と 'caddy' コンテナは起動してはならない（構成に含まれない）
+    # 'sandpack-bundler' と 'nginx' コンテナは起動してはならない（構成に含まれない）
     assert "sandpack-bundler" not in services, "フェーズ1（通常起動）であるにもかかわらず、sandpack-bundler が構成に含まれています。"
-    assert "caddy" not in services, "フェーズ1（通常起動）であるにもかかわらず、caddy が構成に含まれています。"
+    assert "nginx" not in services, "フェーズ1（通常起動）であるにもかかわらず、nginx が構成に含まれています。"
 
 def test_integration_phase2_profile_behavior():
     """
     B-2: ssl-mode プロファイル指定時、
-    sandpack-bundler および caddy サービスが構成に正しく含まれる（起動される）ことを検証します。
+    sandpack-bundler および nginx サービスが構成に正しく含まれる（起動される）ことを検証します。
     """
     config = run_compose_config(profiles=["ssl-mode"])
     services = config.get("services", {})
     
     # フェーズ2・3（ssl-mode）では、両方のサービスが含まれている必要がある
     assert "sandpack-bundler" in services, "ssl-mode プロファイルが指定されたが、sandpack-bundler が構成に含まれていません。"
-    assert "caddy" in services, "ssl-mode プロファイルが指定されたが、caddy が構成に含まれていません。"
+    assert "nginx" in services, "ssl-mode プロファイルが指定されたが、nginx が構成に含まれていません。"
     
     # 依存関係（depends_on）のチェック
-    caddy_service = services["caddy"]
-    depends_on = caddy_service.get("depends_on", {})
+    nginx_service = services["nginx"]
+    depends_on = nginx_service.get("depends_on", {})
     
     # docker compose config のバージョンによっては depends_on がリストまたは辞書になるため柔軟に対応
     depends_list = list(depends_on.keys()) if isinstance(depends_on, dict) else list(depends_on)
-    assert "librechat" in depends_list, "caddy の起動依存関係に librechat がありません。"
-    assert "sandpack-bundler" in depends_list, "caddy の起動依存関係に sandpack-bundler がありません。"
+    assert "librechat" in depends_list, "nginx の起動依存関係に librechat がありません。"
+    assert "sandpack-bundler" in depends_list, "nginx の起動依存関係に sandpack-bundler がありません。"
+
