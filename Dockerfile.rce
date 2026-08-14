@@ -1,30 +1,65 @@
-FROM python:3.12-slim
+# ==========================================
+# Stage 1: Builder using uv for Python 3.13
+# ==========================================
+FROM ubuntu:24.04 AS builder
 
-# Set UTF-8 locale for Japanese filename support
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install curl / ca-certificates for uv
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+WORKDIR /app
+
+# Install standalone Python 3.13 and create virtual environment
+ENV UV_PYTHON_INSTALL_DIR=/opt/python
+RUN uv python install 3.13
+RUN uv venv /opt/venv --python 3.13
+
+# Install dependencies into virtualenv (include setuptools for distutils compatibility in 3.13)
+ENV PATH="/opt/venv/bin:$PATH"
+COPY rce_requirements.txt .
+RUN uv pip install --no-cache-dir "setuptools>=83.0.0" wheel -r rce_requirements.txt
+
+# ==========================================
+# Stage 2: Minimal Runtime on Ubuntu 24.04
+# ==========================================
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 ENV PYTHONUTF8=1
+ENV PATH="/opt/venv/bin:$PATH"
 
-# Create a non-root user
-RUN groupadd -g 1000 sandboxuser && \
-    useradd -m -u 1000 -g sandboxuser sandboxuser
-
-WORKDIR /usr/src/app
-
-COPY --chown=sandboxuser:sandboxuser rce_requirements.txt .
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+# Install only necessary runtime libraries and Japanese font
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
     fonts-ipafont-gothic \
     && rm -rf /var/lib/apt/lists/*
-RUN pip install --no-cache-dir --upgrade pip "setuptools>=78.1.1" wheel "msgpack>=1.2.1" jaraco.context && \
-    pip install --no-cache-dir -r rce_requirements.txt
+
+# Copy standalone Python 3.13 and virtual environment from builder
+COPY --from=builder /opt/python /opt/python
+COPY --from=builder /opt/venv /opt/venv
+
+# Configure non-root user (UID/GID 1000)
+RUN userdel -r ubuntu 2>/dev/null || true && \
+    groupadd -g 1000 sandboxuser && \
+    useradd -m -u 1000 -g sandboxuser sandboxuser
 
 # Automatically load japanize-matplotlib on startup to avoid DejaVu Sans font warnings
-RUN printf "try:\n    import japanize_matplotlib\nexcept ImportError:\n    pass\n" > /usr/local/lib/python3.12/site-packages/sitecustomize.py
+RUN printf "try:\n    import japanize_matplotlib\nexcept ImportError:\n    pass\n" > /opt/venv/lib/python3.13/site-packages/sitecustomize.py
 
 # Create workspace directory and set permissions
 RUN mkdir -p /mnt/data && chown sandboxuser:sandboxuser /mnt/data
 
 USER sandboxuser
+WORKDIR /mnt/data
 
-# Keep the container running so we can exec into it
+# Keep the container running for exec
 CMD ["tail", "-f", "/dev/null"]
