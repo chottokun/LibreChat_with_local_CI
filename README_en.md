@@ -172,10 +172,11 @@ Ollama officially supports OpenAI-compatible API paths. Integrate it as a custom
   docker compose -f docker-compose.yml -f docker-compose.librechat.yml up -d
   ```
 
-### 4. Technical Architecture and Bug Reference Specifications
-For detailed internal specifications regarding character encoding, path resolutions, and automatic API mitigation systems, refer to the dedicated technical documents in the `/docs` directory for future development:
+### 4. Technical Architecture and Documentation
+For detailed internal specifications regarding character encoding, path resolutions, and automatic API mitigation systems, refer to the OKF knowledge base in `docs/`:
 
-* **[Japanese Filename Preservation & Spec Reference](./docs/librechat_japanese_filename_bug.md)**:
-  Deep dive technical notes explaining how the UTF-8 original filenames are parsed, and how the UTF-8 locale environment inside the container is set up to prevent character corruption.
-* **[Session ID Resolution & Automatic Fallback Reference](./docs/librechat_session_id_bug_analysis.md)**:
-  Detailed analysis of LibreChat's session ID omission behavior and how the API manages state using user_id bindings and short-term cache fallback mechanisms.
+* **[Knowledge Index (docs/index.md)](./docs/index.md)**: Main documentation index
+* **[Japanese Filename & UTF-8 Spec](./docs/domain/file-handling.md)**: UTF-8 original filename handling and container locale design.
+* **[Session ID Resolution & Fallback](./docs/domain/session-resolution.md)**: Automatic fallback design for missing session IDs.
+* **[System Architecture Overview](./docs/architecture/overview.md)**: Architecture overview and container execution flow.
+
