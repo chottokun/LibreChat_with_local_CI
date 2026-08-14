@@ -14,5 +14,5 @@
 * **Domain & UI**: RCE で生成されたグラフ画像（Matplotlib 等）の自動検知と Base64 エンコード機能を実装し、LibreChat チャット UI メッセージ内での即時インライン描画に対応。`files` メタデータ（`storage_session_id`, `session_id`, `inherited`）の整合性を確保。
 * **Domain & Storage**: `/mnt/data/` 配下の深いサブディレクトリ（ネスト構造）のファイルを `os.walk` で再帰走査し、FastAPI の `{filename:path}` ワイルドカードルーティングおよび階層パスを保持した Nanoid 逆引き解決により、深いパスのファイル表示・ダウンロードに完全対応。
 * **Domain & Artifacts**: AI が作成・保存したプログラムコードファイル（`.py`, `.sh`, `.R`, `.js`, `.ts` 等）の自動検知とダウンロード・プレビュー仕様を体系化。
-* **Learnings**: コンテナ内 `python3 -c` でのワンライナー構文（セミコロン直後の `for` 文による `SyntaxError`）の落とし穴を特定し、マルチラインスクリプト渡しによる堅牢な実行パターンへ修正。
+* **Infrastructure & Security**: 正式な CA 証明書（Let's Encrypt / 社内プライベート PKI / 商用 CA）への無停止入れ替え手順、モジュラス検証、パーミッション仕様を [docs/infrastructure/reverse-proxy.md](file:///home/nobuhiko/Project/LibreChat_with_local_CI/docs/infrastructure/reverse-proxy.md) に体系化。
 

@@ -57,10 +57,87 @@ bash certs/generate_cert.sh
 
 ---
 
-## 4. 将来の OIDC / SSO 拡張方針
+## 4. 正式な CA 証明書（商用 / 社内 PKI / Let's Encrypt）への入れ替え手順
+
+本番運用や社内正式展開において、信頼された認証局（CA）から発行された正式な SSL/TLS 証明書へ切り替える手順です。
+
+### 4.1 証明書ファイルの準備と配置
+Nginx コンテナは `./certs` ディレクトリを読み取り専用マウントしているため、正式な証明書と秘密鍵を以下のファイル名で配置します。
+
+| ファイル名 | 内容 | 備考 |
+| :--- | :--- | :--- |
+| **`certs/server.crt`** | **サーバ証明書 + 中間CA証明書 (フルチェーン)** | 中間CA証明書がある場合は、サーバ証明書の後ろに結合して配置します。 |
+| **`certs/server.key`** | **秘密鍵 (Private Key)** | パスフレーズなしの RSA / ECDSA 秘密鍵。 |
+
+```bash
+# 1. 既存の自己署名証明書のバックアップ（任意）
+mv certs/server.crt certs/server.crt.selfsigned
+mv certs/server.key certs/server.key.selfsigned
+
+# 2. 正式な証明書と秘密鍵を配置
+cp /path/to/your_domain.fullchain.crt certs/server.crt
+cp /path/to/your_domain.key certs/server.key
+
+# 3. 適切なパーミッションを設定
+chmod 644 certs/server.crt
+chmod 600 certs/server.key
+```
+
+### 4.2 証明書と秘密鍵の整合性確認 (事前チェック)
+適用前に、証明書と秘密鍵のペアが一致しているか（モジュラスのハッシュ値が同一か）を確認します：
+
+```bash
+# 証明書のモジュラス確認
+openssl x509 -noout -modulus -in certs/server.crt | openssl md5
+
+# 秘密鍵のモジュラス確認
+openssl rsa -noout -modulus -in certs/server.key | openssl md5
+
+# ※ 両方の出力（MD5 ハッシュ値）が完全に一致していれば正常です。
+```
+
+### 4.3 Nginx の設定再読み込み（無停止切り替え）
+コンテナを停止・再起動することなく、数ミリ秒の無停止で新しい証明書を反映できます：
+
+```bash
+# Nginx 設定テスト
+docker exec librechat-nginx nginx -t
+
+# 設定と証明書のホットリロード
+docker exec librechat-nginx nginx -s reload
+```
+
+---
+
+### 4.4 シナリオ別 運用ガイド
+
+#### シナリオ A: Let's Encrypt / Certbot を利用する場合
+パブリックドメイン（例: `chat.example.com`）をお持ちの場合、Certbot 等で自動取得した証明書をシンボリックリンクまたはコピーして配置します。
+
+```bash
+# 例: Certbot で取得した場合
+sudo cp /etc/letsencrypt/live/chat.example.com/fullchain.pem ./certs/server.crt
+sudo cp /etc/letsencrypt/live/chat.example.com/privkey.pem ./certs/server.key
+sudo chown $(id -u):$(id -g) ./certs/server.*
+docker exec librechat-nginx nginx -s reload
+```
+
+#### シナリオ B: 社内プライベート CA / Active Directory 認証局 (AD CS) を利用する場合
+社内イントラネット専用のドメイン（例: `librechat.corp.local`）や IP 向けに社内 CA から発行された証明書を適用します。
+1. CSR を作成して社内 CA に提出・発行を受ける。
+2. サーバ証明書と社内中間 CA 証明書を結合して `server.crt` とする：
+   ```bash
+   cat server_cert.pem intermediate_ca.pem > certs/server.crt
+   ```
+3. クライアント端末（Windows / Mac / Linux）側にあらかじめ社内ルート CA 証明書が配布されていれば、ブラウザの警告なしで安全に接続できます。
+
+---
+
+## 5. 将来の OIDC / SSO 拡張方針
 
 Nginx をフロントに配置することで、以下のエンタープライズ認証拡張が容易に実現可能です：
 1. **`oauth2-proxy` の導入**:
    - Nginx の `auth_request` ディレクティブを用い、LibreChat へのアクセス前に OIDC 認証（IDプロバイダ認証）を要求。
 2. **ヘッダーベースのシングルサインオン (SSO)**:
    - 認証済みユーザー情報（メールアドレス・表示名）を `X-Forwarded-User` 等のヘッダーで安全に LibreChat 側へ伝達。
+
