@@ -90,7 +90,7 @@ async def get_api_key(
     api_key_h: Optional[str] = Security(api_key_header),
     api_key_q: Optional[str] = Query(None, alias="api_key"),
     token: Optional[HTTPAuthorizationCredentials] = Security(bearer_scheme)
-):
+) -> Optional[str]:
     # テスト環境用に認証をスキップする設定が有効な場合、即座に通過させる
     if DISABLE_AUTH:
         return "disabled"
@@ -1107,7 +1107,7 @@ async def upload_files(
     files: Optional[List[UploadFile]] = File(None),
     file: Optional[List[UploadFile]] = File(None),
     session_id_query: Optional[str] = Query(None, alias="session_id"),
-    key: str = Security(get_api_key)
+    key: Optional[str] = Security(get_api_key)
 ):
     """
     Uploads files to a specific session sandbox.
