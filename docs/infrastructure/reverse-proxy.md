@@ -139,9 +139,24 @@ docker exec librechat-nginx nginx -s reload
 
 ## 5. 将来の OIDC / SSO 拡張方針
 
-Nginx をフロントに配置することで、以下のエンタープライズ認証拡張が容易に実現可能です：
-1. **`oauth2-proxy` の導入**:
-   - Nginx の `auth_request` ディレクティブを用い、LibreChat へのアクセス前に OIDC 認証（IDプロバイダ認証）を要求。
-2. **ヘッダーベースのシングルサインオン (SSO)**:
-   - 認証済みユーザー情報（メールアドレス・表示名）を `X-Forwarded-User` 等のヘッダーで安全に LibreChat 側へ伝達。
+本アーキテクチャでは、要件やセキュリティポリシーに応じて以下の **2つのアプローチ** で OIDC / SSO を実現できます。
+
+### パターン 1: LibreChat 内蔵 OIDC / OAuth2 の利用（推奨・標準）
+LibreChat はネイティブで OpenID Connect (OIDC) 認証機能を内蔵しているため、**Nginx 側への追加コンテナ（oauth2-proxy 等）を挟まずに** SSO 連携が可能です。
+
+* **役割分担**:
+  * **Nginx**: SSL 終端と標準的なプロキシヘッダー（`X-Forwarded-Proto`, `Host` 等）の転送のみを担当（現在の構成のまま）。
+  * **LibreChat**: IdP（Keycloak, Microsoft Entra ID, Google 等）とのトークン検証およびユーザーの自動プロビジョニング・セッション管理を担当。
+* **設定方法**:
+  LibreChat 本体の `.env` に OIDC 関連環境変数（`OPENID_CLIENT_ID`, `OPENID_ISSUER`, `OPENID_SESSION_SECRET` 等）を設定するだけで完結します。
+
+---
+
+### パターン 2: oauth2-proxy + Nginx によるネットワーク前段認証
+LibreChat アプリケーションの手前（ネットワーク層）で厳密にアクセス制限・IP フィルタリングをかけたい場合に採用します。
+
+* **構成**:
+  1. **oauth2-proxy の導入**: Nginx の `auth_request` ディレクティブを用い、LibreChat へのパケット到達前に IdP での認証を強制。
+  2. **ヘッダーベース SSO**: 認証済みユーザー情報（メールアドレス・表示名）を `X-Forwarded-User` 等のヘッダーで LibreChat へ伝達。
+  
 
