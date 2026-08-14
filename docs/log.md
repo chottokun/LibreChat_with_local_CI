@@ -2,6 +2,8 @@
 
 ## 2026-08-14
 
+* **Cleanup**: OKF 形式ナレッジへの集約完了に伴い、重複・古い過去の作業メモ（`docs/archive/`）をリポジトリから完全削除。
+* **Security**: RCE 多層防御アーキテクチャ（HTTP セキュリティヘッダー、tarfile コード安全注入、Path Traversal サニタイズ詳細、Socket Proxy 最小権限化、DoS/セッション制御）を [docs/architecture/security.md](./architecture/security.md) に拡充・体系化。
 * **Convention**: GitHubでの視認性向上のため、各ナレッジディレクトリのインデックスファイル名を `index.md` から `README.md` へ統一。
 * **Restructure**: OKF（Open Knowledge Framework）形式に準拠したディレクトリ構造（`architecture/`, `domain/`, `infrastructure/`）への再編・整備を実施。
 * **Architecture**: システム構成、`WeakrefRLock`・`pending_sessions` による並行制御、セキュリティモデル（Docker Socket Proxy、非ルート実行、CORS制限）の概念ドキュメントを作成。

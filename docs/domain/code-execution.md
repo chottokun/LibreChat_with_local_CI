@@ -26,14 +26,30 @@ graph TD
     Req["実行リクエスト (/exec)"] --> LangCheck{言語の判定}
     
     LangCheck -- "python / py" --> PyExec["Python AST 解析 & 式変換"]
-    PyExec --> RunPy["python -u /mnt/data/script.py"]
+    PyExec --> SafeInject["tarfile (put_archive) による安全な一時ファイル配置 (/mnt/data/exec_uuid.py)"]
+    SafeInject --> RunPy["python3 /mnt/data/exec_uuid.py"]
     
-    LangCheck -- "bash / sh" --> RunBash["bash /mnt/data/script.sh"]
+    LangCheck -- "bash / sh" --> BashInject["tarfile (put_archive) による安全な一時ファイル配置 (/mnt/data/exec_uuid.sh)"]
+    BashInject --> RunBash["bash /mnt/data/exec_uuid.sh"]
     
-    LangCheck -- "r" --> RunR["Rscript /mnt/data/script.R"]
+    LangCheck -- "r" --> RInject["tarfile (put_archive) による安全な一時ファイル配置 (/mnt/data/exec_uuid.R)"]
+    RInject --> RunR["Rscript /mnt/data/exec_uuid.R"]
+
+    RunPy --> CleanUp["finally 節で一時ファイル自動削除 (rm /mnt/data/exec_uuid.*)"]
+    RunBash --> CleanUp
+    RunR --> CleanUp
 ```
 
-## 3. Python AST 解析による末尾式自動評価
+## 3. 安全なコード注入と自動クリーンアップ (Security & Isolation)
+
+* **コマンドラインインジェクション防止**:
+  コードを `python -c "..."` やシェル引数として渡すと、引用符のエスケープ漏れによる意図しないコマンド実行や、OS のコマンドライン長上限（`ARG_MAX`）による実行失敗が発生します。
+* **実装**:
+  実行対象コードを `tarfile` ストリームに変換し、Docker API の `put_archive` 経由でコンテナ内の `/mnt/data/exec_<uuid>.<ext>` に安全に転送します。
+* **一時ファイル自動破棄**:
+  実行完了後は `finally` ブロックで一時スクリプトファイルを確実に `rm` 削除し、過去の実行コード残留やコンテナ内ディスク容量の消費を防ぎます。
+
+## 4. Python AST 解析による末尾式自動評価
 
 Jupyter Notebook のように、スクリプトの末尾に記述された式（例: `df.head()` や `x + 1`）の結果を自動的に標準出力へ表示させるため、Python AST（抽象構文木）を解析してコードを動的に変換します。
 
