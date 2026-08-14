@@ -23,7 +23,7 @@ LibreChat Custom RCE（Remote Code Execution）は、LibreChatのCode Interprete
 
 ```mermaid
 graph TD
-    Client["LibreChat UI / WebUI"] -->|HTTP / REST API| Proxy["Caddy / Reverse Proxy (Optional)"]
+    Client["LibreChat UI / WebUI"] -->|HTTP / REST API| Proxy["Nginx / Reverse Proxy (Optional)"]
     Proxy -->|Port 8000| Gateway["FastAPI Gateway (main.py)"]
     
     subgraph "API ゲートウェイ層"
