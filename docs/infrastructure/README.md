@@ -17,7 +17,7 @@ tags:
 
 * [Docker Setup & Storage Modes](./docker-setup.md) - Docker Compose構成、起動モード、ストレージモード（put_archive vs ボリュームマウント）
 * [Sandbox Image Design](./sandbox-image.md) - `Dockerfile.rce` / `Dockerfile.rce.gpu` / `Dockerfile.api` の設計とセキュリティ設定
-* [Caddy SSL & Artifacts Integration](./caddy-ssl-artifacts.md) - Caddyリバースプロキシ、Sandpack Bundler の Docker Compose Profiles による段階的導入
+* [Reverse Proxy & SSL Design (Nginx)](./reverse-proxy.md) - Nginxリバースプロキシ、SAN証明書、WebSocket/SSEストリーミング、将来のOIDC/SSO設計
 * [Configuration Reference](./configuration.md) - API環境変数、LibreChat環境変数、`librechat.yaml` 設定一覧
 
 ## 関連領域

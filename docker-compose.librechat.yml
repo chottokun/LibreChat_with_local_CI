@@ -130,23 +130,18 @@ services:
       - librechat-network
 
   # ---------------------------------------------------------------------------
-  # Caddy Reverse Proxy Service (For SSL/TLS support in Phase 2 & 3)
+  # Nginx Reverse Proxy Service (For SSL/TLS & Future OIDC/SSO in Phase 2 & 3)
   # ---------------------------------------------------------------------------
-  caddy:
-    image: caddy:latest
-    container_name: caddy
+  nginx:
+    image: nginx:alpine
+    container_name: librechat-nginx
     restart: always
     ports:
-      - "${CADDY_HTTPS_PORT:-443}:443"
-      - "${CADDY_SANDPACK_PORT:-8443}:8443"
-    environment:
-      - CUSTOM_CERT_PATH=${CUSTOM_CERT_PATH:-internal}
-      - CUSTOM_KEY_PATH=${CUSTOM_KEY_PATH:-internal}
+      - "${HTTPS_PORT:-443}:443"
+      - "${SANDPACK_HTTPS_PORT:-8443}:8443"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile
-      - ./certs:/certs:ro
-      - caddy-data:/data
-      - caddy-config:/config
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/nginx/certs:ro
     profiles:
       - ssl-mode  # ★「ssl-mode」プロファイル指定時のみコンテナを起動する
     networks:
@@ -165,6 +160,4 @@ volumes:
   mongodb-data:
   meili-data:
   ollama-data:
-  caddy-data:
-  caddy-config:
   pgdata2:

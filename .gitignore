@@ -24,6 +24,9 @@ test_upload.txt
 # Dynamically generated certificates
 root.crt
 *.crt
+*.key
+certs/*.key
+certs/*.crt
 
 # Coverage and test artifacts
 .coverage
