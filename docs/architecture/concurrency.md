@@ -34,11 +34,11 @@ graph TD
     end
 
     Req["並行リクエスト到達"] --> GL
-    GL -->|1. キャパシティ確認: len(active) + len(pending) < MAX| CheckCap{上限内か?}
+    GL -->|"1. キャパシティ確認: len(active) + len(pending) < MAX"| CheckCap{上限内か?}
     CheckCap -- No --> Err["503 Service Unavailable (Capacity Exceeded)"]
     CheckCap -- Yes --> MarkPending["pending_sessions.add(session_id)"]
     MarkPending --> WL
-    WL -->|2. セッション個別ロック取得| ExecSession["コンテナ起動 / exec_run 実行"]
+    WL -->|"2. セッション個別ロック取得"| ExecSession["コンテナ起動 / exec_run 実行"]
     ExecSession --> UnmarkPending["pending_sessions.remove(session_id)"]
 ```
 

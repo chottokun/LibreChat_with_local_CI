@@ -23,8 +23,8 @@ LibreChat Custom RCE（Remote Code Execution）は、LibreChatのCode Interprete
 
 ```mermaid
 graph TD
-    Client["LibreChat UI / WebUI"] -->|HTTP / REST API| Proxy["Nginx / Reverse Proxy (Optional)"]
-    Proxy -->|Port 8000| Gateway["FastAPI Gateway (main.py)"]
+    Client["LibreChat UI / WebUI"] -->|"HTTP / REST API"| Proxy["Nginx / Reverse Proxy (Optional)"]
+    Proxy -->|"Port 8000"| Gateway["FastAPI Gateway (main.py)"]
     
     subgraph "API ゲートウェイ層"
         Gateway --> Auth["API Key 認証検証 (secrets.compare_digest)"]
@@ -33,14 +33,14 @@ graph TD
     end
 
     subgraph "コンテナ管理層"
-        KM -->|TCP 通信 (API制限付き)| SockProxy["Docker Socket Proxy (tecnativa/docker-socket-proxy)"]
-        SockProxy -->|Docker API| Engine["Docker Engine (Host Daemon)"]
+        KM -->|"TCP 通信 (API制限付き)"| SockProxy["Docker Socket Proxy (tecnativa/docker-socket-proxy)"]
+        SockProxy -->|"Docker API"| Engine["Docker Engine (Host Daemon)"]
     end
 
     subgraph "サンドボックス隔離実行層"
-        Engine -->|docker exec_run| C1["RCE Container: session_1 (Dockerfile.rce)"]
-        Engine -->|docker exec_run| C2["RCE Container: session_2 (Dockerfile.rce)"]
-        Engine -->|docker exec_run| CN["RCE Container: session_N (Dockerfile.rce)"]
+        Engine -->|"docker exec_run"| C1["RCE Container: session_1 (Dockerfile.rce)"]
+        Engine -->|"docker exec_run"| C2["RCE Container: session_2 (Dockerfile.rce)"]
+        Engine -->|"docker exec_run"| CN["RCE Container: session_N (Dockerfile.rce)"]
     end
 ```
 
