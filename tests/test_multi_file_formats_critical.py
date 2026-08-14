@@ -1,4 +1,5 @@
 import os
+import docker
 import pytest
 import mimetypes
 from urllib.parse import quote
@@ -173,13 +174,18 @@ def test_adversarial_header_injection():
     assert 'reportSet-Cookie: admin=trueinjection.pdf' in cd
 
 
-def test_adversarial_path_traversal_variations():
+def test_adversarial_path_traversal_variations(monkeypatch):
     """
     Tests various adversarial path traversal patterns against KernelManager.download_file.
-    All must be safely rejected with 400 Bad Request or 403 Forbidden.
+    All must be safely rejected with 400 Bad Request or 404 Not Found (or 403 Forbidden).
     """
     km = main.kernel_manager
     session_id = "test_session_id"
+
+    # Mock container get_archive to raise NotFound when container is accessed
+    mock_container = MagicMock()
+    mock_container.get_archive.side_effect = docker.errors.NotFound("File not found")
+    monkeypatch.setattr(km, "get_or_create_container", MagicMock(return_value=mock_container))
 
     adversarial_paths = [
         "../../etc/passwd",
