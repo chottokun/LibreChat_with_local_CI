@@ -16,7 +16,7 @@ def test_download_session_file_generic_exception_volume_mode(caplog):
             raise Exception("Disk error")
         return original_exists(path)
 
-    with patch("os.path.exists", side_effect=conditional_exists):
+    with patch("pathlib.Path.exists", conditional_exists):
         local_client = TestClient(app, raise_server_exceptions=False)
         response = local_client.get(
             "/download/test_session/test_file.txt",

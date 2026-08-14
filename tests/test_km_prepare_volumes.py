@@ -27,12 +27,12 @@ def test_prepare_volumes_enabled(kernel_manager):
 
     with patch("main.RCE_DATA_DIR_HOST", host_base), \
          patch("main.RCE_DATA_DIR_INTERNAL", internal_base), \
-         patch("os.makedirs") as mock_makedirs:
+         patch("pathlib.Path.mkdir") as mock_mkdir:
 
         volumes = kernel_manager._prepare_volumes(session_id)
 
         expected_host_path = os.path.join(host_base, session_id)
-        expected_internal_path = os.path.join(internal_base, session_id)
 
         assert volumes == {expected_host_path: {'bind': '/mnt/data', 'mode': 'rw'}}
-        mock_makedirs.assert_called_once_with(expected_internal_path, exist_ok=True)
+        mock_mkdir.assert_called_once_with(parents=True, exist_ok=True)
+

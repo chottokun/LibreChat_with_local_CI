@@ -378,9 +378,13 @@ def test_download_file_invalid_filename(kernel_manager):
 def test_download_file_volume_success(kernel_manager):
     with patch("main.RCE_DATA_DIR_HOST", "/host/path"), \
          patch("main.RCE_DATA_DIR_INTERNAL", "/internal/path"), \
-         patch("os.path.exists", return_value=True), \
-         patch("os.path.getmtime", return_value=123456789.0), \
-         patch("builtins.open", MagicMock(return_value=MagicMock(__enter__=MagicMock(return_value=MagicMock(read=MagicMock(return_value=b"content")))))):
+         patch("pathlib.Path.exists", return_value=True), \
+         patch("pathlib.Path.stat") as mock_stat, \
+         patch("pathlib.Path.read_bytes", return_value=b"content"):
+
+        mock_stat_result = MagicMock()
+        mock_stat_result.st_mtime = 123456789.0
+        mock_stat.return_value = mock_stat_result
 
         content, mtime = kernel_manager.download_file("test_session", "test.txt")
         assert content == b"content"
@@ -389,7 +393,7 @@ def test_download_file_volume_success(kernel_manager):
 def test_download_file_volume_not_found(kernel_manager):
     with patch("main.RCE_DATA_DIR_HOST", "/host/path"), \
          patch("main.RCE_DATA_DIR_INTERNAL", "/internal/path"), \
-         patch("os.path.exists", return_value=False):
+         patch("pathlib.Path.exists", return_value=False):
 
         with pytest.raises(FileNotFoundError):
             kernel_manager.download_file("test_session", "test.txt")
