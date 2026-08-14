@@ -97,7 +97,7 @@ def test_cleanup_sessions_directory_exists_error(km):
         return original_exists(path)
 
     with patch("main.RCE_DATA_DIR_INTERNAL", "/tmp/sessions"), \
-         patch("os.path.exists", side_effect=conditional_exists), \
+         patch("pathlib.Path.exists", conditional_exists), \
          patch("main.logger") as mock_logger:
 
         km.cleanup_sessions()
@@ -132,7 +132,7 @@ def test_cleanup_sessions_missing_data_error(km):
 
     with patch("main.RCE_DATA_DIR_INTERNAL", "/tmp/sessions"), \
          patch("shutil.rmtree", side_effect=Exception("rmtree failed")), \
-         patch("os.path.exists", side_effect=conditional_exists), \
+         patch("pathlib.Path.exists", conditional_exists), \
          patch("main.logger") as mock_logger:
 
         km.cleanup_sessions()
