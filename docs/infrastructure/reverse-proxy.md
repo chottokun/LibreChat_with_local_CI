@@ -2,8 +2,10 @@
 type: Concept
 title: Reverse Proxy & SSL Design (Nginx)
 description: Nginx を用いた SSL/TLS 終端、SAN 証明書、WebSocket/SSE リアルタイムストリーミング、将来の OIDC/SSO 連携設計
-status: active
-timestamp: 2026-08-14T11:00:00+09:00
+status: stable
+generated:
+  by: agent/gemini-3.7-flash
+  at: 2026-08-14T11:00:00+09:00
 tags:
   - infrastructure
   - nginx

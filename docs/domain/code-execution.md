@@ -2,8 +2,10 @@
 type: Concept
 title: Multi-Language Code Execution
 description: Python/Bash/R 多言語実行モデル、AST解析による末尾式自動出力、Matplotlib 日本語グラフ描画
-status: active
-timestamp: 2026-08-14T09:30:00+09:00
+status: stable
+generated:
+  by: agent/gemini-3.7-flash
+  at: 2026-08-14T09:30:00+09:00
 tags:
   - domain
   - execution

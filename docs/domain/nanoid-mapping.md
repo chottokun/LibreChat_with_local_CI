@@ -2,8 +2,10 @@
 type: Concept
 title: Nanoid ID Mapping
 description: LibreChat isValidID バリデーション (21文字Nanoid) 準拠と内部UUIDの双方向マッピング設計
-status: active
-timestamp: 2026-08-14T09:30:00+09:00
+status: stable
+generated:
+  by: agent/gemini-3.7-flash
+  at: 2026-08-14T09:30:00+09:00
 tags:
   - domain
   - nanoid

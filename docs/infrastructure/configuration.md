@@ -2,8 +2,10 @@
 type: Concept
 title: Configuration Reference
 description: RCE API環境変数、LibreChat環境変数、librechat.yaml 設定リファレンス
-status: active
-timestamp: 2026-08-14T09:30:00+09:00
+status: stable
+generated:
+  by: agent/gemini-3.7-flash
+  at: 2026-08-14T09:30:00+09:00
 tags:
   - infrastructure
   - configuration

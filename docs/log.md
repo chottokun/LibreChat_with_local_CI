@@ -2,6 +2,7 @@
 
 ## 2026-08-14
 
+* **Standardization**: OKF (Open Knowledge Format) v0.2 公式仕様に基づき、`docs/` 配下の全ドキュメント（17件）のフロントマターを完全整備。`status: stable` への統一、OKF Actor記法準拠の `generated: { by: agent/..., at: ... }` 付与、およびルート [docs/README.md](./README.md) の `okf_version: "0.2"` YAML構文修正を完了。
 * **Documentation**: [README.md](../README.md) および [README_en.md](../README_en.md) を最新化。311件のテストスイート実績、グラフ自動インライン描画、tarfileコード注入防御、Nginx SSL/Artifacts連携、環境変数一覧、OKFナレッジリンクを体系的に更新。
 * **Refinement**: `docs/` 配下の全ドキュメントを最新コードベースと突合検証。環境変数（`RCE_GPU_ENABLED`, `DOCKER_HOST`）の反映、`WeakrefRLock` 実装コードとの整合、Nanoid レスポンススキーマ（`images`, `storage_session_id` 等）の完全同期を完了。
 * **Cleanup**: どこからも参照されていなかったテスト結果画像（`docs/assets/`）および過去の作業メモ（`docs/archive/`）を完全削除。

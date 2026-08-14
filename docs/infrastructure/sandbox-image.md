@@ -2,8 +2,10 @@
 type: Concept
 title: Sandbox Image Design
 description: Dockerfile.rce, Dockerfile.rce.gpu, Dockerfile.api の設計、非ルートユーザー、日本語フォント構成
-status: active
-timestamp: 2026-08-14T09:30:00+09:00
+status: stable
+generated:
+  by: agent/gemini-3.7-flash
+  at: 2026-08-14T09:30:00+09:00
 tags:
   - infrastructure
   - dockerfile

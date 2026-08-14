@@ -2,8 +2,10 @@
 type: Concept
 title: Session ID Resolution & Fallback
 description: LibreChatのセッションID欠落に対する自動解決優先順位とフォールバック仕様
-status: active
-timestamp: 2026-08-14T09:30:00+09:00
+status: stable
+generated:
+  by: agent/gemini-3.7-flash
+  at: 2026-08-14T09:30:00+09:00
 tags:
   - domain
   - session

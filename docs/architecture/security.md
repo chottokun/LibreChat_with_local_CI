@@ -2,8 +2,10 @@
 type: Concept
 title: Security Model
 description: Docker Socket Proxy、非ルートコンテナ、ネットワーク隔離、CORSホワイトリスト、HTTPセキュリティヘッダー、コードインジェクション防止などの多層防御設計
-status: active
-timestamp: 2026-08-14T16:25:00+09:00
+status: stable
+generated:
+  by: agent/gemini-3.7-flash
+  at: 2026-08-14T16:25:00+09:00
 tags:
   - architecture
   - security

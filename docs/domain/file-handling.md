@@ -2,8 +2,10 @@
 type: Concept
 title: File Handling & UTF-8
 description: O(N)ファイル管理、日本語UTF-8ファイル名処理、Content-Dispositionヘッダー設計
-status: active
-timestamp: 2026-08-14T09:30:00+09:00
+status: stable
+generated:
+  by: agent/gemini-3.7-flash
+  at: 2026-08-14T09:30:00+09:00
 tags:
   - domain
   - files

@@ -1,16 +1,17 @@
+---
 type: Concept
 title: {{CONCEPT_TITLE}}
 description: {{CONCEPT_DESCRIPTION}}
-status: active
-timestamp: {{TIMESTAMP_ISO8601}}
+status: stable
+generated:
+  by: {{ACTOR}}
+  at: {{TIMESTAMP_ISO8601}}
 tags:
-
-* {{TAG_1}}
+  - {{TAG_1}}
 sources:
-* id: {{SOURCE_ID}}
-resource: /Docs/raw/{{SOURCE_FILE_NAME}}
-title: {{SOURCE_TITLE}}
-
+  - id: {{SOURCE_ID}}
+    resource: /docs/raw/{{SOURCE_FILE_NAME}}
+    title: {{SOURCE_TITLE}}
 ---
 
 # {{CONCEPT_TITLE}}

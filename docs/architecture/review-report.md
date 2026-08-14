@@ -2,8 +2,10 @@
 type: Concept
 title: Comprehensive Code Review Report
 description: アーキテクチャ、並行性、セキュリティ、テスト網羅性に関する包括的コードレビューレポート
-status: active
-timestamp: 2026-08-14T10:30:00+09:00
+status: stable
+generated:
+  by: agent/gemini-3.7-flash
+  at: 2026-08-14T10:30:00+09:00
 tags:
   - architecture
   - security

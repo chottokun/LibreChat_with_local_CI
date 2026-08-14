@@ -2,8 +2,10 @@
 type: Concept
 title: Refactoring Proposals & Critical Risk Analysis
 description: 型安全性、テストモック標準化、ロギング改善の提案および批判的リスク・副作用分析
-status: active
-timestamp: 2026-08-14T10:30:00+09:00
+status: stable
+generated:
+  by: agent/gemini-3.7-flash
+  at: 2026-08-14T10:30:00+09:00
 tags:
   - architecture
   - refactoring

@@ -2,8 +2,10 @@
 type: Concept
 title: Detailed Function Audit Matrix
 description: main.py および KernelManager の主要関数の不変条件、スレッドセーフティ、例外安全性の監査マトリクス
-status: active
-timestamp: 2026-08-14T10:30:00+09:00
+status: stable
+generated:
+  by: agent/gemini-3.7-flash
+  at: 2026-08-14T10:30:00+09:00
 tags:
   - architecture
   - audit

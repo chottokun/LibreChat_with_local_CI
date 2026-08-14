@@ -2,8 +2,10 @@
 type: Concept
 title: Docker Setup & Storage Modes
 description: Docker Compose 構成、フルスタック/単体起動手順、ストレージモード (put_archive vs Volume Mount)
-status: active
-timestamp: 2026-08-14T09:30:00+09:00
+status: stable
+generated:
+  by: agent/gemini-3.7-flash
+  at: 2026-08-14T09:30:00+09:00
 tags:
   - infrastructure
   - docker-compose
