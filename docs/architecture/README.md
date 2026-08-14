@@ -20,5 +20,5 @@ tags:
 * [Security Model](./security.md) - Docker Socket Proxy、非ルートコンテナ、ネットワーク隔離、CORSホワイトリストなどの多層防御
 
 ## 関連領域
-* [Domain](../domain/index.md) - ドメインロジックおよびデータ構造
-* [Infrastructure](../infrastructure/index.md) - Dockerおよびインフラ構成
+* [Domain](../domain/README.md) - ドメインロジックおよびデータ構造
+* [Infrastructure](../infrastructure/README.md) - Dockerおよびインフラ構成

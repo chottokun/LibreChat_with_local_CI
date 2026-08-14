@@ -21,5 +21,5 @@ tags:
 * [Configuration Reference](./configuration.md) - API環境変数、LibreChat環境変数、`librechat.yaml` 設定一覧
 
 ## 関連領域
-* [Architecture](../architecture/index.md) - 全体アーキテクチャおよびセキュリティ
-* [Domain](../domain/index.md) - ドメインロジックおよびファイル処理
+* [Architecture](../architecture/README.md) - 全体アーキテクチャおよびセキュリティ
+* [Domain](../domain/README.md) - ドメインロジックおよびファイル処理

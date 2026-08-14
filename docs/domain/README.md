@@ -21,5 +21,5 @@ tags:
 * [Multi-Language Code Execution](./code-execution.md) - Python/Bash/R 多言語実行、AST解析による末尾評価式出力、Matplotlib 日本語描画
 
 ## 関連領域
-* [Architecture](../architecture/index.md) - システム全体アーキテクチャ
-* [Infrastructure](../infrastructure/index.md) - インフラおよびDocker設定
+* [Architecture](../architecture/README.md) - システム全体アーキテクチャ
+* [Infrastructure](../infrastructure/README.md) - インフラおよびDocker設定

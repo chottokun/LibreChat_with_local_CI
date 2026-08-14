@@ -175,7 +175,7 @@ Ollama officially supports OpenAI-compatible API paths. Integrate it as a custom
 ### 4. Technical Architecture and Documentation
 For detailed internal specifications regarding character encoding, path resolutions, and automatic API mitigation systems, refer to the OKF knowledge base in `docs/`:
 
-* **[Knowledge Index (docs/index.md)](./docs/index.md)**: Main documentation index
+* **[Knowledge Index (docs/README.md)](./docs/README.md)**: Main documentation index
 * **[Japanese Filename & UTF-8 Spec](./docs/domain/file-handling.md)**: UTF-8 original filename handling and container locale design.
 * **[Session ID Resolution & Fallback](./docs/domain/session-resolution.md)**: Automatic fallback design for missing session IDs.
 * **[System Architecture Overview](./docs/architecture/overview.md)**: Architecture overview and container execution flow.
