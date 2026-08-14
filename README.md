@@ -11,16 +11,20 @@ LibreChatにコード実行機能を提供する、サンドボックス型のCo
 ## 主要な機能と仕様
 
 - **多言語対応**: Pythonに加え、BashおよびR言語の実行に対応しています。
-- **サンドボックス隔離**: 各セッションはメモリとCPU制限が課された独立したDockerコンテナ内で実行されます。
-- **セッション永続性**: メッセージ間でのファイルシステムの状態を維持します。
+- **グラフ自動インライン描画**: MatplotlibやSeaborn等で生成されたグラフ画像（`.png`, `.jpg`, `.svg`, `.webp`）を自動検知・Base64エンコードし、LibreChatのチャットUI上に即時インライン表示。
+- **サンドボックス隔離**: 各セッションはメモリとCPU制限が課された独立した非ルート（`sandboxuser: 1000`）Dockerコンテナ内で実行されます。
+- **セッション永続性**: メッセージ間でのファイルシステムの状態および深い階層のディレクトリ構造を維持します。
 - **堅牢な並行制御**: セッション個別ロック（`WeakrefRLock`）および起動中セッションの追跡（`pending_sessions`）により、最大容量制限時のレースコンディションを完全に防御。
-- **セキュリティ**:
-  - `LIBRECHAT_CODE_API_KEY` による認証の強制。
-  - Docker Socket Proxyを介したDocker APIへの安全なアクセス。
-  - アップロード/ダウンロード時のディレクトリトラバーサル脆弱性対策を実装済み。
+- **多層防御セキュリティ**:
+  - `LIBRECHAT_CODE_API_KEY` によるタイミング攻撃耐性認証（`secrets.compare_digest`）。
+  - Docker Socket Proxyを介した最小権限Docker APIアクセス（ホストソケットの直接マウント禁止）。
+  - `tarfile`（`put_archive`）による安全な一時スクリプト注入と実行後の自動削除（コマンドラインインジェクション防止）。
+  - `sanitize_id` / `Path.is_relative_to` による多層ディレクトリトラバーサル防御。
+  - セキュアHTTPレスポンスヘッダー（HSTS, nosniff, DENY, XSS-Protection）。
   - CORSでのワイルドカード `'*'` 使用の拒否および明示的なホワイトリストの厳格な検証。
-- **効率的なマッピング**: セッションごとのファイルID管理を $O(N)$ で処理するスケーラブルな設計。
-- **GPUサポート**: CUDA対応イメージを用いたGPU計算をサポート（オプション）。
+- **効率的なマッピング**: セッションごとのファイルID管理を $O(N)$ で処理し、LibreChatの21文字Nanoid検証仕様に完全準拠。
+- **Nginx リバースプロキシ / SSL / Artifacts 連携**: SAN対応自己署名/正式CA証明書によるHTTPS終端、および Sandpack Bundler（ポート 8443）による React/HTML UI 描画に対応。
+- **GPUサポート**: CUDA対応イメージ（`Dockerfile.rce.gpu`）を用いたGPU計算をサポート（オプション）。
 
 ## 必須要件
 
@@ -32,7 +36,7 @@ LibreChatにコード実行機能を提供する、サンドボックス型のCo
 
 ## セットアップ手順
 
-### A. フルスタック構成 (LibreChat + API + DB)
+### A. フルスタック構成 (LibreChat + API + DB + Nginx)
 
 1.  **環境変数の設定**:
     ```bash
@@ -58,6 +62,13 @@ docker compose up -d --build
 ```
 LibreChat側の `.env` で `LIBRECHAT_CODE_BASEURL` と `LIBRECHAT_CODE_API_KEY` を設定してください。
 
+### C. GPU対応構成 (オプション)
+
+```bash
+docker build -f Dockerfile.rce.gpu -t custom-rce-kernel:gpu .
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+```
+
 ---
 
 ## 環境変数 (Configuration)
@@ -66,19 +77,23 @@ LibreChat側の `.env` で `LIBRECHAT_CODE_BASEURL` と `LIBRECHAT_CODE_API_KEY`
 |---|---|---|
 | `LIBRECHAT_CODE_API_KEY` | (必須) | APIアクセス認証用の共有キー。 |
 | `DISABLE_CODE_API_AUTH` | `false` | `true` に設定するとAPIキーの認証を一時的に無効化（スキップ）します。テスト環境や一部のバグ回避用。 |
+| `DOCKER_HOST` | (環境依存 / `tcp://docker-proxy:2375`) | Docker Socket Proxy またはホストデーモンの接続先。 |
 | `RCE_IMAGE_NAME` | `custom-rce-kernel:latest` | サンドボックスコンテナに使用するイメージ。 |
+| `RCE_GPU_ENABLED` | `false` | `true` に設定すると NVIDIA GPU パススルーを有効化。 |
 | `RCE_MEM_LIMIT` | `512m` | コンテナあたりのメモリ上限。 |
 | `RCE_CPU_LIMIT` | `500000000` | コンテナあたりのCPU制限 (0.5 CPU)。 |
 | `RCE_MAX_SESSIONS` | `100` | 最大同時セッション数。 |
-| `RCE_NETWORK_ENABLED` | `false` | サンドボックス内からの外部通信許可。 |
+| `RCE_SESSION_TTL` | `3600` | アイドルセッションの自動破棄までの生存時間（秒）。 |
+| `RCE_NETWORK_ENABLED` | `false` | サンドボックス内からの外部通信許可（セキュリティ上 `false` 推奨）。 |
 | `RCE_DATA_DIR` | (なし) | ホスト側のデータ保存先パス（ボリュームマウント用）。 |
+| `CORS_ALLOWED_ORIGINS` | `http://localhost:3000,http://localhost:3080` | 許可するCORSオリジンのカンマ区切りホワイトリスト（`*` は禁止）。 |
 
 ---
 
 ## ストレージ構成
 
 1.  **標準モード (put_archive)**:
-    `RCE_DATA_DIR` が未設定の場合。Docker APIを介してファイルを転送します。特別なパーミッション設定なしで動作します。
+    `RCE_DATA_DIR` が未設定の場合。Docker APIを介してファイルを転送します。特別なパーミッション設定なしで安全・確実に動作します。
 2.  **ボリュームマウントモード**:
     `RCE_DATA_DIR` にホストの絶対パスを指定した場合。高速なファイルアクセスとホスト側へのデータ永続化が可能です。
     *注意: ホスト側のディレクトリは UID 1000 に書き込み権限が必要です。*
@@ -87,7 +102,7 @@ LibreChat側の `.env` で `LIBRECHAT_CODE_BASEURL` と `LIBRECHAT_CODE_API_KEY`
 
 ## 開発とテスト
 
-本プロジェクトはテスト駆動開発 (TDD) に基づいて構築されており、58ファイル276件以上のテストスイートを備えています。
+本プロジェクトはテスト駆動開発 (TDD) に基づいて構築されており、**全 311 件のテストスイート** を備えています。
 
 テストは以下のコマンドで一括実行してください。
 
@@ -99,10 +114,11 @@ LIBRECHAT_CODE_API_KEY=test-secret-key uv run pytest tests/ -v
 > **注意**: テスト実行時には、ダミーの API キーを指定する `LIBRECHAT_CODE_API_KEY` 環境変数を付与して実行してください。指定がない場合、FastAPI の起動処理でエラーとなりテストが開始されません。
 
 テスト範囲:
-- API認証およびエンドポイントの整合性
-- 多言語実行 (Python/Bash/R) の正常系・異常系
-- ディレクトリトラバーサル等のセキュリティ検証
-- 高負荷時の並列セッション管理とリソース復旧
+- API認証およびタイミング攻撃防御・エンドポイントの整合性
+- 多言語実行 (Python/Bash/R) および AST による末尾式自動出力
+- 画像（PNG/JPEG/SVG/WebP）、PDF、Office 文書、ZIP、CSV/Parquet 等のファイル処理
+- パストラバーサル・二重拡張子・CRLF インジェクション等のセキュリティ検証
+- 高負荷並列セッション管理、レースコンディション防御、リソース復旧とTTLクリーンアップ
 
 ---
 
@@ -184,13 +200,24 @@ Ollama は標準で OpenAI 互換の API エンドポイントを提供してい
   docker compose -f docker-compose.yml -f docker-compose.librechat.yml up -d
   ```
 
-### 4. システム内部仕様および各種ドキュメント
-文字コードの処理仕様やセッションID欠落に対するAPIの自動防衛機構など、本システム固有の技術的仕様については、`docs/` 配下のOKFナレッジベースを参照してください。
+---
+
+## ドキュメント一覧 (OKF Knowledge Base)
+
+システムの詳細仕様、設計原則、インフラ構築手順については `docs/` 配下のナレッジベースを参照してください。
 
 * **[ナレッジインデックス (docs/README.md)](./docs/README.md)**: ドキュメント全体の目次
-* **[日本語ファイル名処理・UTF-8仕様](./docs/domain/file-handling.md)**: UTF-8オリジナルファイル名の中継およびコンテナ内ロケール設計仕様。
-* **[セッションID解決仕様と自動フォールバック設計](./docs/domain/session-resolution.md)**: セッションID欠落に対する自動フォールバック設計仕様。
-* **[アーキテクチャ全体設計](./docs/architecture/overview.md)**: システム構成とコンテナ実行フロー。
+* **[システム全体アーキテクチャ (docs/architecture/overview.md)](./docs/architecture/overview.md)**: 全体システム構成とコンテナ実行フロー
+* **[セキュリティモデル & 多層防御 (docs/architecture/security.md)](./docs/architecture/security.md)**: Socket Proxy、非ルート実行、HTTPヘッダー、コード注入防御
+* **[並行制御とキャパシティ管理 (docs/architecture/concurrency.md)](./docs/architecture/concurrency.md)**: `WeakrefRLock` と `pending_sessions` によるレースコンディション防御
+* **[多言語コード実行 & グラフ画像描画 (docs/domain/code-execution.md)](./docs/domain/code-execution.md)**: AST 解析、Matplotlib 日本語描画、Base64 画像自動キャプチャ
+* **[セッションID解決仕様 & 自動フォールバック (docs/domain/session-resolution.md)](./docs/domain/session-resolution.md)**: LibreChat セッションID欠落に対する自動解決仕様
+* **[ファイル処理 & UTF-8 仕様 (docs/domain/file-handling.md)](./docs/domain/file-handling.md)**: $O(N)$ ファイルマッピング、深いサブディレクトリ走査、RFC 5987 日本語ファイル名
+* **[Docker構成 & ストレージモード (docs/infrastructure/docker-setup.md)](./docs/infrastructure/docker-setup.md)**: フルスタック/単体起動手順とストレージ選定
+* **[サンドボックス環境設計 (docs/infrastructure/sandbox-image.md)](./docs/infrastructure/sandbox-image.md)**: CPU/GPU 版イメージ設計と日本語フォント構成
+* **[リバースプロキシ & SSL設計 (docs/infrastructure/reverse-proxy.md)](./docs/infrastructure/reverse-proxy.md)**: Nginx SSL終端、SAN証明書、Artifacts (Sandpack Bundler) 連携
+* **[設定リファレンス (docs/infrastructure/configuration.md)](./docs/infrastructure/configuration.md)**: 環境変数および `librechat.yaml` 設定一覧
+
 
 
 

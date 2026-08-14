@@ -2,6 +2,7 @@
 
 ## 2026-08-14
 
+* **Documentation**: [README.md](../README.md) および [README_en.md](../README_en.md) を最新化。311件のテストスイート実績、グラフ自動インライン描画、tarfileコード注入防御、Nginx SSL/Artifacts連携、環境変数一覧、OKFナレッジリンクを体系的に更新。
 * **Refinement**: `docs/` 配下の全ドキュメントを最新コードベースと突合検証。環境変数（`RCE_GPU_ENABLED`, `DOCKER_HOST`）の反映、`WeakrefRLock` 実装コードとの整合、Nanoid レスポンススキーマ（`images`, `storage_session_id` 等）の完全同期を完了。
 * **Cleanup**: どこからも参照されていなかったテスト結果画像（`docs/assets/`）および過去の作業メモ（`docs/archive/`）を完全削除。
 * **Security**: RCE 多層防御アーキテクチャ（HTTP セキュリティヘッダー、tarfile コード安全注入、Path Traversal サニタイズ詳細、Socket Proxy 最小権限化、DoS/セッション制御）を [docs/architecture/security.md](./architecture/security.md) に拡充・体系化。
