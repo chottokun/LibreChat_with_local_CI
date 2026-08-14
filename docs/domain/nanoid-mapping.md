@@ -60,11 +60,25 @@ graph LR
   "stdout": "実行標準出力...",
   "stderr": "",
   "exit_code": 0,
+  "status": "success",
   "session_id": "JYaZO0meBUqiREYVlIP0v",
   "files": [
     {
       "id": "uYj2Ykhc025YgKf3YVE2T",
       "name": "sales_trend.png",
+      "url": "/api/files/code/download/JYaZO0meBUqiREYVlIP0v/uYj2Ykhc025YgKf3YVE2T",
+      "type": "image/png",
+      "session_id": "JYaZO0meBUqiREYVlIP0v",
+      "storage_session_id": "JYaZO0meBUqiREYVlIP0v",
+      "inherited": false
+    }
+  ],
+  "images": [
+    {
+      "name": "sales_trend.png",
+      "format": "png",
+      "data": "iVBORw0KGgoAAAANSUhEUg...",
+      "base64": "iVBORw0KGgoAAAANSUhEUg...",
       "url": "/api/files/code/download/JYaZO0meBUqiREYVlIP0v/uYj2Ykhc025YgKf3YVE2T",
       "type": "image/png"
     }
@@ -75,6 +89,8 @@ graph LR
 * `session_id`: 21文字Nanoid
 * `files[].id`: 21文字Nanoid
 * `files[].url`: `/api/files/code/download/{21字セッションNanoid}/{21字ファイルNanoid}`
+* `images[]`: 生成されたグラフ画像（`.png`, `.jpg`, `.svg`, `.webp` 等）をチャット UI 内で即時インライン描画するための Base64 エンコードデータ
+
 
 ## 4. 関連ドキュメント
 * [Session Resolution](./session-resolution.md) - セッションIDの解決優先順位

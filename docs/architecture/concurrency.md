@@ -50,16 +50,35 @@ graph TD
 
 ```python
 class WeakrefRLock:
+    """A wrapper around threading.RLock that supports weak references."""
     def __init__(self):
-        self._locks = weakref.WeakValueDictionary()
-        self._global_lock = threading.Lock()
+        self._lock = threading.RLock()
 
-    def get_lock(self, session_id: str) -> threading.RLock:
-        with self._global_lock:
-            lock = self._locks.get(session_id)
+    def __enter__(self):
+        return self._lock.__enter__()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return self._lock.__exit__(exc_type, exc_val, exc_tb)
+
+    def acquire(self, blocking=True, timeout=-1):
+        return self._lock.acquire(blocking, timeout)
+
+    def release(self):
+        return self._lock.release()
+
+class KernelManager:
+    def __init__(self):
+        self.active_kernels = {}
+        self.lock = threading.Lock()
+        self.session_locks = weakref.WeakValueDictionary()
+        self.session_locks_lock = threading.Lock()
+
+    def _get_session_lock(self, session_id: str) -> WeakrefRLock:
+        with self.session_locks_lock:
+            lock = self.session_locks.get(session_id)
             if lock is None:
-                lock = threading.RLock()
-                self._locks[session_id] = lock
+                lock = WeakrefRLock()
+                self.session_locks[session_id] = lock
             return lock
 ```
 

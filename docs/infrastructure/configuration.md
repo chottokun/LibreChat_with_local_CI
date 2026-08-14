@@ -23,15 +23,17 @@ tags:
 |---|---|---|---|
 | `LIBRECHAT_CODE_API_KEY` | (なし) | ○ (認証有効時) | APIアクセス認証用の共有シークレットキー。 |
 | `DISABLE_CODE_API_AUTH` | `false` | - | `true` に設定するとAPIキー認証をスキップ。テスト・ローカル環境用。 |
+| `DOCKER_HOST` | (環境依存 / `tcp://docker-proxy:2375`) | - | Docker Socket Proxy またはホストデーモンの接続先。 |
 | `RCE_DATA_DIR` / `RCE_DATA_DIR_HOST` | (なし) | - | ホスト側のセッション共有ディレクトリ絶対パス（ボリュームマウントモード用）。 |
 | `RCE_DATA_DIR_INTERNAL` | `/app/shared_volumes/sessions` | - | APIコンテナ内部のセッションマウントパス。 |
 | `RCE_IMAGE_NAME` | `custom-rce-kernel:latest` | - | サンドボックスコンテナに使用するDockerイメージ名。 |
+| `RCE_GPU_ENABLED` | `false` | - | `true` に設定すると NVIDIA GPU アクセラレーションを有効化。 |
 | `RCE_MEM_LIMIT` | `512m` | - | コンテナあたりの最大メモリ上限。 |
 | `RCE_CPU_LIMIT` | `500000000` | - | コンテナあたりの最大CPUクォータ（500,000,000 = 0.5 CPU）。 |
 | `RCE_MAX_SESSIONS` | `100` | - | システム全体の最大同時アクティブセッション数。 |
 | `RCE_SESSION_TTL` | `3600` | - | セッションコンテナの生存時間（秒）。非アクティブ時に自動クリーンアップ。 |
 | `RCE_NETWORK_ENABLED` | `false` | - | サンドボックス内の外部ネットワークアクセス許可フラグ（セキュリティ上 `false` 推奨）。 |
-| `CORS_ALLOWED_ORIGINS` | (明示的オリジン) | - | 許可するCORSオリジンのカンマ区切りリスト（`*` は禁止）。 |
+| `CORS_ALLOWED_ORIGINS` | `http://localhost:3000,http://localhost:3080` | - | 許可するCORSオリジンのカンマ区切りリスト（`*` は禁止）。 |
 
 ## 3. LibreChat 側設定 (`.env.librechat` / `.env`)
 
