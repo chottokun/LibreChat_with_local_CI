@@ -18,6 +18,9 @@ tags:
 * [System Overview](./overview.md) - システム全体アーキテクチャ、主要コンポーネント構成、リクエスト処理フロー
 * [Concurrency Control](./concurrency.md) - `WeakrefRLock` と `pending_sessions` によるスレッドセーフな並行制御とキャパシティ管理
 * [Security Model](./security.md) - Docker Socket Proxy、非ルートコンテナ、ネットワーク隔離、CORSホワイトリストなどの多層防御
+* [Comprehensive Code Review Report](./review-report.md) - 包括的コードレビューレポート
+* [Function Audit Matrix](./detailed-function-audit.md) - 主要関数の不変条件・例外安全性の監査マトリクス
+* [Refactoring Proposals & Risk Analysis](./refactoring-proposals.md) - リファクタリング提案と批判的リスク・副作用分析
 
 ## 関連領域
 * [Domain](../domain/README.md) - ドメインロジックおよびデータ構造
