@@ -5,8 +5,8 @@ set -euo pipefail
 CERTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${CERTS_DIR}"
 
-# Detect host local IP or fallback
-HOST_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "10.3.101.94")
+# Detect host local IP or fallback to generic placeholder
+HOST_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "192.168.1.100")
 
 echo "Generating self-signed SSL certificate with SAN..."
 echo "Host IP: ${HOST_IP}"

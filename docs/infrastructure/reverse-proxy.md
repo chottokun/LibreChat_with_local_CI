@@ -17,7 +17,7 @@ tags:
 ## 1. 概要
 
 本システムでは、リバースプロキシとして **Nginx**（`nginx:alpine`）を採用し、以下の機能を提供します：
-1. **SSL/TLS 終端**: IP アドレス直接アクセス（`https://10.3.101.94`）およびローカルホスト（`https://localhost`）での安全な暗号化通信。
+1. **SSL/TLS 終端**: IP アドレス直接アクセス（例: `https://192.168.1.100`）およびローカルホスト（`https://localhost`）での安全な暗号化通信。
 2. **リアルタイムストリーミング**: AI の文字生成（Server-Sent Events: SSE）および WebSocket の低遅延中継（`proxy_buffering off`）。
 3. **Artifacts (Sandpack Bundler) 連携**: ポート 8443 による React/HTML 等の UI 描画コンテナの HTTPS 化。
 4. **将来の OIDC / SSO 拡張性**: Keycloak、Entra ID (Azure AD)、Google Workspace 等との連携基盤。
@@ -49,7 +49,7 @@ tags:
 
 ## 3. SSL 証明書の生成 (`certs/generate_cert.sh`)
 
-ホスト IP アドレス（`10.3.101.94`）および `localhost`, `127.0.0.1` を SAN（Subject Alternative Name）に含めた自己署名証明書をワンコマンドで生成できます：
+ホスト IP アドレス（例: `192.168.1.100`）および `localhost`, `127.0.0.1` を SAN（Subject Alternative Name）に含めた自己署名証明書をワンコマンドで生成できます：
 
 ```bash
 bash certs/generate_cert.sh
