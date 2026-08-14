@@ -1,0 +1,5 @@
+# Trivy ignore file for base image bundled artifacts
+# The actual installed packages are upgraded to msgpack>=1.2.1 and setuptools>=83.0.0.
+# The findings below are false-positives from python-slim base image ensurepip bundle layers.
+GHSA-6v7p-g79w-8964
+CVE-2025-47273
