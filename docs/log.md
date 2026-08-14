@@ -9,4 +9,6 @@
 * **Infrastructure**: Docker Compose構成（ストレージモード選択）、サンドボックスイメージ設計、Caddy SSL & Sandpack Bundlerプロファイル運用、設定リファレンスを作成。
 * **Infrastructure**: `Dockerfile.rce` (CPU版) および `Dockerfile.rce.gpu` (GPU版) を Ubuntu 24.04 + Python 3.13 (`uv` スタンドアロンマルチステージ構成) に刷新。OS・Pythonバージョンを完全統一し、CPU/GPUシームレス切り替えに対応。
 * **CI**: `.trivyignore` を追加し、`.github/workflows/ci.yml` に `trivyignores` オプションを設定して Trivy CI 脆弱性スキャンエラーを完全解消。
+* **Refactor**: `main.py` のファイルパス操作を `os.path` から `pathlib.Path`（`Path.resolve()`, `is_relative_to()`, `Path.name`）へ完全移行し、型安全性とパストラバーサル防御を強化。
+* **Testing**: PDF, 画像 (PNG/JPEG/SVG/WebP), 音声/動画, オフィス文書 (Excel/Word), 圧縮ファイル (ZIP/GZIP), データ形式 (CSV/Parquet) の多種ファイル対応および二重拡張子・CRLFヘッダーインジェクション等の批判的（Adversarial）テストスイート（全311件パス）を追加。
 
