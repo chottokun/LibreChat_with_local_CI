@@ -144,19 +144,19 @@ def test_list_files_success(kernel_manager):
     # Assert
     assert files == ["file1.txt", "file2.py"]
     kernel_manager.get_or_create_container.assert_called_once_with(session_id, external_session_id=None)
-    cmd_expected = [
-        "python3", "-c",
-        "import os, json; "
-        "res = []; "
-        "base = '/mnt/data'; "
-        "for root, dirs, files in os.walk(base): "
-        "    dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ('__pycache__', 'node_modules', '.venv')]; "
-        "    for f in files: "
-        "        if not f.startswith('.'): "
-        "            rel = os.path.relpath(os.path.join(root, f), base); "
-        "            res.append(rel); "
-        "print(json.dumps(res))"
-    ]
+    py_script_expected = (
+        "import os, json\n"
+        "res = []\n"
+        "base = '/mnt/data'\n"
+        "for root, dirs, files in os.walk(base):\n"
+        "    dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ('__pycache__', 'node_modules', '.venv')]\n"
+        "    for f in files:\n"
+        "        if not f.startswith('.'):\n"
+        "            rel = os.path.relpath(os.path.join(root, f), base)\n"
+        "            res.append(rel)\n"
+        "print(json.dumps(res))\n"
+    )
+    cmd_expected = ["python3", "-c", py_script_expected]
     mock_container.exec_run.assert_called_once_with(
         cmd=cmd_expected,
         demux=True

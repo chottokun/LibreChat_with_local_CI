@@ -68,6 +68,61 @@ except ImportError:
 * **メリット**:
   ユーザーがコード内で明示的に `import japanize_matplotlib` やフォント設定を記述しなくても、日本語を含むグラフタイトルや軸ラベルが文字化け（豆腐）せず、警告なしで描画されます。
 
-## 5. 関連ドキュメント
+## 5. 生成画像（グラフ）の自動キャプチャと UI インライン描画
+
+Matplotlib や Seaborn、Plotly 等で生成されたグラフ画像（`.png`, `.jpg`, `.svg`, `.webp` 等）を、LibreChat チャット UI 内で即座にインライン描画させるため、以下の自動パイプラインを実装しています。
+
+```mermaid
+sequenceDiagram
+    participant User as ユーザー / LibreChat
+    participant API as RCE API (main.py)
+    participant Container as Sandbox コンテナ
+
+    User->>API: POST /exec (コード実行)
+    API->>Container: コード実行 & グラフファイル保存 (/mnt/data/plot.png)
+    API->>Container: list_files (新規ファイル検出)
+    API->>Container: download_file (画像バイナリ取得)
+    API->>API: Base64 エンコード & images 配列作成
+    API-->>User: CodeResponse (stdout, files, images: [ { base64: "...", format: "png" } ])
+    User->>User: チャット画面にグラフ画像を即時描画
+```
+
+### 5.1 レスポンス構造
+```json
+{
+  "stdout": "Plot saved\n",
+  "exit_code": 0,
+  "status": "success",
+  "session_id": "nanoid_session_id_21",
+  "files": [
+    {
+      "id": "nanoid_file_id_21c1",
+      "name": "plot.png",
+      "url": "/api/files/code/download/nanoid_session_id_21/nanoid_file_id_21c1",
+      "type": "image/png",
+      "session_id": "nanoid_session_id_21",
+      "storage_session_id": "nanoid_session_id_21",
+      "inherited": false
+    }
+  ],
+  "images": [
+    {
+      "name": "plot.png",
+      "format": "png",
+      "data": "iVBORw0KGgoAAAANSUhEUg...",
+      "base64": "iVBORw0KGgoAAAANSUhEUg...",
+      "url": "/api/files/code/download/nanoid_session_id_21/nanoid_file_id_21c1",
+      "type": "image/png"
+    }
+  ]
+}
+```
+
+### 5.2 知見: コンテナ内 `python3 -c` ワンライナー構文の落とし穴
+* **問題**: `python3 -c "import os; for x in y: ..."` のようにセミコロンの直後に `for` 文を記述すると、Python インタプリタが `SyntaxError: invalid syntax` で異常終了し、ファイル一覧が空になってしまう。
+* **対策**: 改行を含む明示的なマルチラインスクリプト文字列を渡し、安全かつ確実に走査を実行。
+
+## 6. 関連ドキュメント
+* [File Handling & UTF-8](./file-handling.md) - ファイル管理と深い階層の走査
 * [Sandbox Image](../infrastructure/sandbox-image.md) - Dockerfile.rce の構築仕様
 * [Overview](../architecture/overview.md) - システム全体アーキテクチャ

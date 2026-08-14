@@ -11,5 +11,8 @@
 * **CI**: `.trivyignore` を追加し、`.github/workflows/ci.yml` に `trivyignores` オプションを設定して Trivy CI 脆弱性スキャンエラーを完全解消。
 * **Refactor**: `main.py` のファイルパス操作を `os.path` から `pathlib.Path`（`Path.resolve()`, `is_relative_to()`, `Path.name`）へ完全移行し、型安全性とパストラバーサル防御を強化。
 * **Testing**: PDF, 画像 (PNG/JPEG/SVG/WebP), 音声/動画, オフィス文書 (Excel/Word), 圧縮ファイル (ZIP/GZIP), データ形式 (CSV/Parquet) の多種ファイル対応および二重拡張子・CRLFヘッダーインジェクション等の批判的（Adversarial）テストスイート（全311件パス）を追加。
-* **Infrastructure**: リバースプロキシを Caddy から **Nginx**（`nginx:alpine`）へ移行。SAN（Subject Alternative Name）付き自己署名証明書生成スクリプト（`certs/generate_cert.sh`）を整備し、LAN IP（`192.168.1.100` 等）直接アクセス時の SSL プロトコルエラーを完全解消。WebSocket / SSE バッファリング制御および将来の OIDC / SSO 拡張基盤を構築。
+* **Domain & UI**: RCE で生成されたグラフ画像（Matplotlib 等）の自動検知と Base64 エンコード機能を実装し、LibreChat チャット UI メッセージ内での即時インライン描画に対応。`files` メタデータ（`storage_session_id`, `session_id`, `inherited`）の整合性を確保。
+* **Domain & Storage**: `/mnt/data/` 配下の深いサブディレクトリ（ネスト構造）のファイルを `os.walk` で再帰走査し、FastAPI の `{filename:path}` ワイルドカードルーティングおよび階層パスを保持した Nanoid 逆引き解決により、深いパスのファイル表示・ダウンロードに完全対応。
+* **Domain & Artifacts**: AI が作成・保存したプログラムコードファイル（`.py`, `.sh`, `.R`, `.js`, `.ts` 等）の自動検知とダウンロード・プレビュー仕様を体系化。
+* **Learnings**: コンテナ内 `python3 -c` でのワンライナー構文（セミコロン直後の `for` 文による `SyntaxError`）の落とし穴を特定し、マルチラインスクリプト渡しによる堅牢な実行パターンへ修正。
 

@@ -56,9 +56,36 @@ headers = {
 }
 ```
 
-### 3.3 ストリーミングダウンロードの信頼性
-ダウンロードエンドポイント（`/download/{session_id}/{file_id}`）では、FastAPIの `FileResponse` またはストリーミングレスポンスを使用し、適切な `Content-Length` および `Accept-Ranges` ヘッダーを付与することで、ブラウザでの大きなファイルダウンロード時の「ネットワークエラー」を防止します。
+## 4. 深いサブディレクトリ（ネスト構造）の走査とダウンロード
 
-## 4. 関連ドキュメント
+### 4.1 `list_files` による再帰的ファイル走査
+`/mnt/data` 直下だけでなく、任意のサブディレクトリ（例: `/mnt/data/reports/analytics/2026/deep_plot.png`）に生成されたファイルも漏れなく検出するため、コンテナ内で `os.walk` を用いた再帰走査を実施しています。
+* **不要ディレクトリの除外**: `.git`, `.venv`, `__pycache__`, `node_modules` などのシステム/隠しフォルダを自動除外。
+* **相対パスの取得**: `/mnt/data` を起点とする相対パス（例: `reports/analytics/2026/deep_plot.png`）を取得して返却。
+
+### 4.2 `{filename:path}` による階層パスのダウンロードルーティング
+FastAPI の標準パスマッチング（`{filename}`）ではスラッシュ `/` が区切り文字とみなされて 404 になるため、`{filename:path}` ワイルドカードルートを採用しています。
+```python
+@app.get("/api/files/code/download/{session_id}/{filename:path}")
+@app.get("/download/{session_id}/{filename:path}")
+@app.get("/run/download/{session_id}/{filename:path}")
+async def download_session_file(session_id: str, filename: str, ...):
+    # ...
+```
+
+### 4.3 Nanoid 逆引きマッピングの階層パス維持 (`resolve_download_ids`)
+`os.path.basename` による階層の切り落としを排除し、深い相対パスを維持したまま Nanoid ファイル ID との実ファイルパスの相互解決を行います。
+* `Path.parts` によるパストラバーサル（`..`）防御を厳格に維持。
+* `Content-Disposition` ヘッダー内のファイル名には `os.path.basename` を適用し、クライアントブラウザ側で保存名が破損しないよう正規化。
+
+## 5. 作成プログラム・ソースコードファイルのダウンロード対応
+
+AI がサンドボックス内で生成・保存したプログラムコードファイル（`.py`, `.sh`, `.R`, `.js`, `.ts`, `.sql`, `.html`, `.cpp` 等）は、画像やデータファイル（CSV）と同様に `/mnt/data` 配下で検知され、LibreChat チャット欄上でダウンロードカードやプレビューとして利用可能です。
+
+* **MIME タイプ自動判別**: `mimetypes.guess_type` によりテキスト/ソースコード形式として安全に配信。
+* **一時実行ファイルの分離**: 実行時の一時スクリプト（`exec_{uuid}.py`）は実行完了後に安全にクリーンアップされ、ユーザーが明示的に作成したプログラムファイルのみが一覧化されます。
+
+## 6. 関連ドキュメント
+* [Multi-Language Code Execution](./code-execution.md) - 多言語コード実行と画像キャプチャ
 * [Nanoid ID Mapping](./nanoid-mapping.md) - ファイルIDのNanoidマッピング
 * [Sandbox Image](../infrastructure/sandbox-image.md) - Dockerfile.rce の日本語フォント・ロケール設定

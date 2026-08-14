@@ -25,6 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 import shutil
 import ast
 import json
+import base64
 from fastapi.middleware.cors import CORSMiddleware
 if TYPE_CHECKING:
     from starlette.types import Scope, Send
@@ -380,7 +381,8 @@ class KernelManager:
         s_session_id = sanitize_id(session_id)
         if not s_session_id:
             raise HTTPException(status_code=400, detail="Invalid session ID")
-        s_filename = os.path.basename(filename)
+        
+        s_filename = filename.strip().lstrip("/")
 
         with self.lock:
             if s_session_id in self.nanoid_to_session:
@@ -391,13 +393,20 @@ class KernelManager:
                 nanoid_session = self.session_to_nanoid.get(s_session_id, s_session_id)
 
             real_filename = s_filename
-            if nanoid_session in self.file_id_map and s_filename in self.file_id_map[nanoid_session]:
-                real_filename = self.file_id_map[nanoid_session][s_filename]
+            if nanoid_session in self.file_id_map:
+                if s_filename in self.file_id_map[nanoid_session]:
+                    real_filename = self.file_id_map[nanoid_session][s_filename]
+                elif os.path.basename(s_filename) in self.file_id_map[nanoid_session]:
+                    real_filename = self.file_id_map[nanoid_session][os.path.basename(s_filename)]
 
             # Normalize relative path while preventing path traversal
-            norm_filename = os.path.normpath(real_filename).lstrip("/")
-            if ".." in norm_filename.split(os.sep):
-                norm_filename = os.path.basename(real_filename)
+            path_obj = Path(real_filename)
+            if ".." in path_obj.parts or path_obj.is_absolute():
+                raise HTTPException(status_code=400, detail="Invalid filename")
+
+            norm_filename = str(path_obj).lstrip("/")
+            if not norm_filename or norm_filename == ".":
+                raise HTTPException(status_code=400, detail="Invalid filename")
             return real_session_id, norm_filename
 
     def get_or_create_container(self, session_id: str, force_refresh: bool = False, external_session_id: Optional[str] = None):
@@ -815,9 +824,11 @@ class KernelManager:
                     members = tar.getmembers()
                     if not members:
                         raise FileNotFoundError()
-                    f = tar.extractfile(members[0])
-                    if f:
-                        return f.read(), stat.get('mtime', 0)
+                    for member in members:
+                        if member.isfile():
+                            f = tar.extractfile(member)
+                            if f:
+                                return f.read(), stat.get('mtime', 0)
                 raise FileNotFoundError()
             except (docker.errors.NotFound, FileNotFoundError):
                 raise HTTPException(status_code=404, detail="File not found")
@@ -828,19 +839,19 @@ class KernelManager:
     def list_files(self, session_id: str, external_session_id: Optional[str] = None):
         container = self.get_or_create_container(session_id, external_session_id=external_session_id)
         # Use python os.walk to recursively list files in /mnt/data, excluding hidden folders/files.
-        cmd = [
-            "python3", "-c",
-            "import os, json; "
-            "res = []; "
-            "base = '/mnt/data'; "
-            "for root, dirs, files in os.walk(base): "
-            "    dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ('__pycache__', 'node_modules', '.venv')]; "
-            "    for f in files: "
-            "        if not f.startswith('.'): "
-            "            rel = os.path.relpath(os.path.join(root, f), base); "
-            "            res.append(rel); "
-            "print(json.dumps(res))"
-        ]
+        py_script = (
+            "import os, json\n"
+            "res = []\n"
+            "base = '/mnt/data'\n"
+            "for root, dirs, files in os.walk(base):\n"
+            "    dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ('__pycache__', 'node_modules', '.venv')]\n"
+            "    for f in files:\n"
+            "        if not f.startswith('.'):\n"
+            "            rel = os.path.relpath(os.path.join(root, f), base)\n"
+            "            res.append(rel)\n"
+            "print(json.dumps(res))\n"
+        )
+        cmd = ["python3", "-c", py_script]
 
         try:
             res = container.exec_run(cmd=cmd, demux=True)
@@ -848,9 +859,20 @@ class KernelManager:
             container = self.get_or_create_container(session_id, force_refresh=True, external_session_id=external_session_id)
             res = container.exec_run(cmd=cmd, demux=True)
 
-        if res.exit_code == 0:
+        if isinstance(res.output, tuple) and len(res.output) == 2:
             stdout, stderr = res.output
-            output = stdout.decode('utf-8') if stdout else ""
+        elif isinstance(res.output, (bytes, str)):
+            stdout = res.output if isinstance(res.output, bytes) else res.output.encode("utf-8")
+            stderr = None
+        else:
+            stdout, stderr = None, None
+
+        out_str = stdout.decode('utf-8') if stdout else ""
+        err_str = stderr.decode('utf-8') if stderr else ""
+        logger.info("list_files exec_run for session %s: exit_code=%s, stdout='%s', stderr='%s'", session_id, res.exit_code, out_str.strip(), err_str.strip())
+
+        if res.exit_code == 0:
+            output = out_str
             try:
                 files = json.loads(output)
                 return [f for f in files if f]
@@ -960,6 +982,7 @@ class CodeRequest(BaseModel):
     code: str
     lang: Optional[str] = "py"
     session_id: Optional[str] = None
+    entity_id: Optional[str] = None
     user_id: Optional[str] = None
     files: Optional[List[FileInput]] = []
     args: Optional[List[str]] = []
@@ -970,6 +993,9 @@ class FileInfo(BaseModel):
     name: str
     url: str
     type: str
+    session_id: Optional[str] = None
+    storage_session_id: Optional[str] = None
+    inherited: Optional[bool] = False
 
 class CodeResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
@@ -987,7 +1013,7 @@ class CodeResponse(BaseModel):
 
 def _get_effective_session_id(req: CodeRequest) -> Optional[str]:
     """Extracts session_id from CodeRequest with various fallbacks."""
-    effective_session_id = req.session_id
+    effective_session_id = req.session_id or req.entity_id
     if not effective_session_id and req.files and len(req.files) > 0:
         # Pydantic parses this into FileInput objects, or it's a dict if extra fields are allowed
         first_file = req.files[0]
@@ -1077,19 +1103,53 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
         result = await result
     # List generated files and format them for LibreChat native ingestion
     current_files = await asyncio.to_thread(kernel_manager.list_files, real_session_id, external_session_id=nanoid_session)
+    logger.info("Found %d files in session %s (real: %s): %s", len(current_files), nanoid_session, real_session_id, current_files)
     filename_to_id = kernel_manager.get_file_id_mapping(nanoid_session, current_files)
     
+    # Identify input filenames to set inherited flag
+    input_filenames = set()
+    if req.files:
+        for f_in in req.files:
+            name = getattr(f_in, "name", None) or (f_in.get("name") if isinstance(f_in, dict) else None)
+            if name:
+                input_filenames.add(name)
+
     structured_files = []
+    images = []
+
     for f in current_files:
         mime_type, _ = mimetypes.guess_type(f)
+        mime_type = mime_type or "application/octet-stream"
         nanoid_file = filename_to_id[f]
+        is_inherited = f in input_filenames
 
         structured_files.append({
             "id": nanoid_file,
             "name": f,
             "url": f"/api/files/code/download/{nanoid_session}/{nanoid_file}",
-            "type": mime_type or "application/octet-stream"
+            "type": mime_type,
+            "session_id": nanoid_session,
+            "storage_session_id": nanoid_session,
+            "inherited": is_inherited
         })
+
+        # Automatically capture and base64 encode newly generated plot/image files for instant UI inline display
+        if not is_inherited and mime_type.startswith("image/"):
+            try:
+                img_bytes, _ = await asyncio.to_thread(kernel_manager.download_file, real_session_id, f)
+                b64_data = base64.b64encode(img_bytes).decode("utf-8")
+                ext = Path(f).suffix.lstrip(".").lower() or "png"
+                images.append({
+                    "name": f,
+                    "format": ext,
+                    "data": b64_data,
+                    "base64": b64_data,
+                    "url": f"/api/files/code/download/{nanoid_session}/{nanoid_file}",
+                    "type": mime_type
+                })
+                logger.info("Captured image %s (bytes: %d, format: %s)", f, len(img_bytes), ext)
+            except Exception as e:
+                logger.warning("Failed to encode generated image %s for response: %s", f, e)
     
     return {
         "stdout": result["stdout"],
@@ -1100,7 +1160,7 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
         "status": "success" if result["exit_code"] == 0 else "error",
         "session_id": nanoid_session,
         "files": structured_files,
-        "images": [] # Placeholder for future image capture implementation
+        "images": images
     }
 
 @app.post("/upload")
@@ -1216,6 +1276,7 @@ async def list_session_files(session_id: str, key: str = Security(get_api_key)):
 
 def get_download_meta(real_filename: str) -> Tuple[str, Dict[str, str]]:
     """Determines MIME type and constructs headers for file download."""
+    base_name = os.path.basename(real_filename) or real_filename
     # Guess MIME type
     if Path(real_filename).suffix.lower() == ".csv":
         mime_type = "text/plain"  # Force text/plain to allow inline display and bypass Chrome's HTTP download security block
@@ -1229,9 +1290,9 @@ def get_download_meta(real_filename: str) -> Tuple[str, Dict[str, str]]:
 
     # Manually construct Content-Disposition header to ensure maximum compatibility with Japanese filenames.
     # Starlette's default FileResponse might not always provide the filename="..." fallback correctly for non-ASCII.
-    filename_encoded = quote(real_filename)
+    filename_encoded = quote(base_name)
     # Fallback to an ASCII-safe filename or 'file' if no ASCII characters exist.
-    safe_filename_ascii = real_filename.encode('ascii', 'ignore').decode().replace('\\', '').replace('"', '').replace('\r', '').replace('\n', '') or "file"
+    safe_filename_ascii = base_name.encode('ascii', 'ignore').decode().replace('\\', '').replace('"', '').replace('\r', '').replace('\n', '') or "file"
     headers = {
         "Content-Disposition": f"{disposition}; filename=\"{safe_filename_ascii}\"; filename*=utf-8''{filename_encoded}"
     }
@@ -1250,9 +1311,9 @@ async def download_file_query(
     """
     return await download_session_file(session_id, filename, background_tasks, key)
 
-@app.get("/api/files/code/download/{session_id}/{filename}")
-@app.get("/download/{session_id}/{filename}")
-@app.get("/run/download/{session_id}/{filename}")
+@app.get("/api/files/code/download/{session_id}/{filename:path}")
+@app.get("/download/{session_id}/{filename:path}")
+@app.get("/run/download/{session_id}/{filename:path}")
 async def download_session_file(
     session_id: str,
     filename: str,

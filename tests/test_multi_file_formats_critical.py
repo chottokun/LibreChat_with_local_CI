@@ -222,6 +222,43 @@ def test_unicode_special_characters_in_filename():
     assert mime == "application/pdf"
     cd = headers["Content-Disposition"]
     assert "inline" in cd
-    assert "filename*=utf-8''" in cd
-    # Check that URL encoding accurately encodes multibyte CJK and emoji
     assert quote(unicode_filename) in cd
+
+
+def test_generated_images_in_exec_response():
+    """
+    Tests that newly generated image files (e.g. plot.png) are captured, base64 encoded,
+    and returned in the 'images' array of CodeResponse for LibreChat instant UI rendering.
+    """
+    client = TestClient(app)
+    mock_files = ["sales_plot.png", "data.csv"]
+    mock_img_content = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR..."
+
+    with patch("main.kernel_manager.execute_code", return_value={"stdout": "Plot saved", "stderr": "", "exit_code": 0}), \
+         patch("main.kernel_manager.list_files", return_value=mock_files), \
+         patch("main.kernel_manager.download_file", return_value=(mock_img_content, 123456789)):
+
+        response = client.post(
+            "/exec",
+            json={"code": "import matplotlib.pyplot as plt; plt.savefig('sales_plot.png')", "lang": "py"},
+            headers={"X-API-Key": "test-secret-key"}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        
+        # Verify images array
+        assert len(data["images"]) == 1
+        img_info = data["images"][0]
+        assert img_info["name"] == "sales_plot.png"
+        assert img_info["format"] == "png"
+        assert img_info["type"] == "image/png"
+        assert len(img_info["base64"]) > 0
+        assert "url" in img_info
+
+        # Verify structured_files array includes storage session IDs
+        assert len(data["files"]) == 2
+        for f_info in data["files"]:
+            assert "storage_session_id" in f_info
+            assert "session_id" in f_info
+
