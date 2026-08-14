@@ -54,6 +54,7 @@ def test_onprem_env_librechat_templates():
     with open(ENV_LIBRECHAT_PATH, "r", encoding="utf-8") as f:
         content = f.read()
         
+    assert "HTTP_PORT=" in content, ".env.librechat に HTTP_PORT の記述がありません。"
     assert "HTTPS_PORT=" in content, ".env.librechat に HTTPS_PORT の記述がありません。"
     assert "SANDPACK_HTTPS_PORT=" in content, ".env.librechat に SANDPACK_HTTPS_PORT の記述がありません。"
     assert "【フェーズ3: オンプレミス本番/社内CA証明書の適用】" in content, ".env.librechat にオンプレミスフェーズ3用の説明がありません。"

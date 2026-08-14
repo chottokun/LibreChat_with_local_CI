@@ -17,6 +17,10 @@ def test_nginx_conf_exists_and_configured():
     with open(NGINX_CONF_PATH, "r", encoding="utf-8") as f:
         content = f.read()
         
+    # ポート80 の HTTP -> HTTPS 301 リダイレクト設定確認
+    assert "listen 80 default_server" in content, "nginx.conf に listen 80 default_server の定義がありません。"
+    assert "return 301 https://$host$request_uri;" in content, "nginx.conf に HTTPS への 301 リダイレクト設定がありません。"
+    
     # ポート443 と LibreChat リバースプロキシ設定確認
     assert "listen 443 ssl" in content, "nginx.conf に listen 443 ssl の定義がありません。"
     assert "proxy_pass http://librechat:3080;" in content, "nginx.conf に librechat:3080 へのリバースプロキシ設定がありません。"
@@ -32,7 +36,7 @@ def test_nginx_conf_exists_and_configured():
 def test_docker_compose_nginx_service():
     """
     docker-compose.librechat.yml 内に nginx サービスが定義され、
-    'ssl-mode' プロファイルで、ポート443と8443がマッピングされていることを検証します。
+    'ssl-mode' プロファイルで、ポート80, 443と8443がマッピングされていることを検証します。
     """
     assert os.path.exists(DOCKER_COMPOSE_PATH)
     
@@ -50,6 +54,7 @@ def test_docker_compose_nginx_service():
     
     # ports の確認
     ports = nginx_service.get("ports", [])
+    assert any(p == "80:80" or "${HTTP_PORT:-80}:80" in p for p in ports), "nginx サービスのポートに 80 マッピングが設定されていません。"
     assert any(p == "443:443" or "${HTTPS_PORT:-443}:443" in p for p in ports), "nginx サービスのポートに 443 マッピングが設定されていません。"
     assert any(p == "8443:8443" or "${SANDPACK_HTTPS_PORT:-8443}:8443" in p for p in ports), "nginx サービスのポートに 8443 マッピングが設定されていません。"
     

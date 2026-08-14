@@ -17,10 +17,11 @@ tags:
 ## 1. 概要
 
 本システムでは、リバースプロキシとして **Nginx**（`nginx:alpine`）を採用し、以下の機能を提供します：
-1. **SSL/TLS 終端**: IP アドレス直接アクセス（例: `https://192.168.1.100`）およびローカルホスト（`https://localhost`）での安全な暗号化通信。
-2. **リアルタイムストリーミング**: AI の文字生成（Server-Sent Events: SSE）および WebSocket の低遅延中継（`proxy_buffering off`）。
-3. **Artifacts (Sandpack Bundler) 連携**: ポート 8443 による React/HTML 等の UI 描画コンテナの HTTPS 化。
-4. **将来の OIDC / SSO 拡張性**: Keycloak、Entra ID (Azure AD)、Google Workspace 等との連携基盤。
+1. **HTTP → HTTPS 自動リダイレクト**: ポート 80 への平文 HTTP アクセスを自動的にポート 443（HTTPS）へ 301 恒久転送。
+2. **SSL/TLS 終端**: IP アドレス直接アクセス（例: `https://192.168.1.100`）およびローカルホスト（`https://localhost`）での安全な暗号化通信。
+3. **リアルタイムストリーミング**: AI の文字生成（Server-Sent Events: SSE）および WebSocket の低遅延中継（`proxy_buffering off`）。
+4. **Artifacts (Sandpack Bundler) 連携**: ポート 8443 による React/HTML 等の UI 描画コンテナの HTTPS 化。
+5. **将来の OIDC / SSO 拡張性**: Keycloak、Entra ID (Azure AD)、Google Workspace 等との連携基盤。
 
 ---
 
@@ -29,12 +30,15 @@ tags:
 ```
 [ ブラウザ / クライアント (LAN / Local) ]
         |
-        | HTTPS (Port 443) / HTTPS (Port 8443)
+        +-- HTTP  (Port 80)   --> 301 Redirect to HTTPS
+        +-- HTTPS (Port 443)  --> LibreChat 本体 (Port 3080)
+        +-- HTTPS (Port 8443) --> Sandpack Bundler (Port 80)
         v
 +-----------------------------------------------+
 |         Nginx (Reverse Proxy Container)       |
-|  - SSL Termination (server.crt / server.key)  |
-|  - WebSocket / SSE Proxying                   |
+|  - Port 80: HTTP -> HTTPS 301 Redirect        |
+|  - Port 443: SSL Termination & SSE/WS Proxy   |
+|  - Port 8443: Bundler SSL Proxy               |
 +-----------------------+-----------------------+
                         |
        +----------------+----------------+
