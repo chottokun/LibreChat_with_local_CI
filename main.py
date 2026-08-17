@@ -286,7 +286,7 @@ def sanitize_id(id_str: str) -> str:
     # Remove any characters that are not alphanumeric, hyphen, or underscore
     # This prevents path traversal and other injection attacks.
     cleaned = "".join(c for c in id_str if c.isalnum() or c in ('-', '_'))
-    if cleaned.lower() in ("null", "undefined", "none"):
+    if cleaned.lower() in ("null", "undefined", "none", "nan"):
         return ""
     return cleaned
 
@@ -426,7 +426,19 @@ class KernelManager:
             # search file_id_map across all sessions for s_filename or basename
             if not found_in_session:
                 base_fn = os.path.basename(s_filename)
-                for map_nanoid_sid, id_map in self.file_id_map.items():
+
+                # Check LAST_UPLOADED_SESSION_ID first if available
+                global LAST_UPLOADED_SESSION_ID, LAST_UPLOAD_TIME
+                search_sessions = list(self.file_id_map.keys())
+                if LAST_UPLOADED_SESSION_ID and (time.time() - LAST_UPLOAD_TIME < 300):
+                    pref_sid = sanitize_id(LAST_UPLOADED_SESSION_ID)
+                    pref_nanoid = self.session_to_nanoid.get(pref_sid, pref_sid)
+                    if pref_nanoid in search_sessions:
+                        search_sessions.remove(pref_nanoid)
+                        search_sessions.insert(0, pref_nanoid)
+
+                for map_nanoid_sid in search_sessions:
+                    id_map = self.file_id_map[map_nanoid_sid]
                     if s_filename in id_map:
                         real_filename = id_map[s_filename]
                         real_session_id = self.nanoid_to_session.get(map_nanoid_sid, map_nanoid_sid)
@@ -454,19 +466,24 @@ class KernelManager:
 
             # Check filesystem on disk across active sessions if volume mapping is used
             if not found_in_session and RCE_DATA_DIR_INTERNAL and target_nanoid_session is None:
-                base_fn = os.path.basename(s_filename)
-                for active_sid in list(self.active_kernels.keys()):
-                    candidate_path = Path(RCE_DATA_DIR_INTERNAL) / active_sid / base_fn
-                    if candidate_path.exists():
-                        real_filename = base_fn
-                        real_session_id = active_sid
-                        found_in_session = True
-                        logger.info("Resolved file %s on disk in active session %s", base_fn, real_session_id)
-                        break
+                safe_base_fn = Path(s_filename).name
+                if safe_base_fn and safe_base_fn not in (".", ".."):
+                    abs_base = Path(RCE_DATA_DIR_INTERNAL).resolve()
+                    for active_sid in list(self.active_kernels.keys()):
+                        safe_active_sid = sanitize_id(active_sid)
+                        if not safe_active_sid:
+                            continue
+                        cand_dir = (abs_base / safe_active_sid).resolve()
+                        cand_file = (cand_dir / safe_base_fn).resolve()
+                        if cand_file.is_relative_to(cand_dir) and cand_file.exists():
+                            real_filename = safe_base_fn
+                            real_session_id = active_sid
+                            found_in_session = True
+                            logger.info("Resolved file %s on disk in active session %s", safe_base_fn, real_session_id)
+                            break
 
             # Fallback for real_session_id if still unassigned or invalid
             if not real_session_id or real_session_id.lower() in ("null", "undefined", "none"):
-                global LAST_UPLOADED_SESSION_ID, LAST_UPLOAD_TIME
                 if LAST_UPLOADED_SESSION_ID and (time.time() - LAST_UPLOAD_TIME < 300):
                     s_last = sanitize_id(LAST_UPLOADED_SESSION_ID)
                     if s_last:
@@ -1325,15 +1342,34 @@ async def upload_files(
         # Get file mappings
         filenames = [name for name, _ in file_data]
         filename_to_id = kernel_manager.get_file_id_mapping(nanoid_session, filenames)
-        uploaded_files = [{"fileId": filename_to_id[name], "filename": name} for name in filenames]
+        uploaded_files = []
+        for name in filenames:
+            fid = filename_to_id[name]
+            uploaded_files.append({
+                "fileId": fid,
+                "id": fid,
+                "filename": name,
+                "name": name,
+                "url": f"/api/files/code/download/{nanoid_session}/{fid}",
+                "session_id": nanoid_session,
+                "storage_session_id": nanoid_session
+            })
         
         res = {
             "message": "success",
+            "status": "success",
             "session_id": nanoid_session or "",
+            "storage_session_id": nanoid_session or "",
             "files": uploaded_files if uploaded_files is not None else []
         }
         if uploaded_files:
-            res.update(uploaded_files[0])
+            res.update({
+                "fileId": uploaded_files[0]["fileId"],
+                "id": uploaded_files[0]["id"],
+                "filename": uploaded_files[0]["filename"],
+                "name": uploaded_files[0]["name"],
+                "url": uploaded_files[0]["url"]
+            })
             
         logger.info("Upload returning success. Response: %s", res)
         return res
@@ -1407,6 +1443,16 @@ async def list_session_files(session_id: str, key: str = Security(get_api_key)):
     """
     try:
         s_sid = sanitize_id(session_id)
+        if not s_sid:
+            global LAST_UPLOADED_SESSION_ID, LAST_UPLOAD_TIME
+            if LAST_UPLOADED_SESSION_ID and (time.time() - LAST_UPLOAD_TIME < 300):
+                s_sid = sanitize_id(LAST_UPLOADED_SESSION_ID)
+            elif kernel_manager.active_kernels:
+                s_sid = max(kernel_manager.active_kernels.items(), key=lambda x: x[1].get("last_accessed", 0))[0]
+
+        if not s_sid:
+            return []
+
         real_session_id = kernel_manager.resolve_session_id(s_sid)
         with kernel_manager.lock:
             nanoid_session = kernel_manager.session_to_nanoid.get(real_session_id, s_sid)
@@ -1418,10 +1464,15 @@ async def list_session_files(session_id: str, key: str = Security(get_api_key)):
             id_map = kernel_manager.file_id_map.get(nanoid_session, {})
             reversed_map = {v: k for k, v in id_map.items()}
             for f in files:
+                fid = reversed_map.get(f, "")
                 file_list.append({
                     "filename": f,
-                    "fileId": reversed_map.get(f, ""),
-                    "id": reversed_map.get(f, "")
+                    "fileId": fid,
+                    "id": fid,
+                    "name": f,
+                    "url": f"/api/files/code/download/{nanoid_session}/{fid}" if fid else f"/api/files/code/download/{nanoid_session}/{f}",
+                    "session_id": nanoid_session,
+                    "storage_session_id": nanoid_session
                 })
 
         return file_list
