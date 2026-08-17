@@ -213,7 +213,17 @@ class SecurityHeadersCORSMiddleware(CORSMiddleware):
     This avoids the issue where @app.middleware('http') wraps CORSMiddleware
     and prevents it from intercepting OPTIONS preflight requests.
     """
-    SECURITY_DOWNLOAD_PREFIXES = ("/download", "/api/files/code/download", "/run/download")
+    SECURITY_DOWNLOAD_PREFIXES = (
+        "/download",
+        "/run/download",
+        "/files/download",
+        "/api/download",
+        "/api/files/download",
+        "/api/files/code/download",
+        "/files/code/download",
+        "/api/code/download",
+        "/code/download",
+    )
 
     async def __call__(self, scope: Scope, receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -275,7 +285,10 @@ def sanitize_id(id_str: str) -> str:
         return ""
     # Remove any characters that are not alphanumeric, hyphen, or underscore
     # This prevents path traversal and other injection attacks.
-    return "".join(c for c in id_str if c.isalnum() or c in ('-', '_'))
+    cleaned = "".join(c for c in id_str if c.isalnum() or c in ('-', '_'))
+    if cleaned.lower() in ("null", "undefined", "none", "nan"):
+        return ""
+    return cleaned
 
 def _get_session_ids(sid: str) -> Tuple[str, str]:
     """
@@ -348,7 +361,7 @@ class KernelManager:
         Guarantees that the returned nanoid_session is a valid 21-character Nanoid.
         """
         s_sid = sanitize_id(sid)
-        if not s_sid:
+        if not s_sid or s_sid.lower() in ("null", "undefined", "none"):
             s_sid = generate_nanoid()
 
         with self.lock:
@@ -378,26 +391,102 @@ class KernelManager:
 
     def resolve_download_ids(self, session_id: str, filename: str) -> Tuple[str, str]:
         """Resolves potential nanoid IDs for session and file to their real values."""
-        s_session_id = sanitize_id(session_id)
-        if not s_session_id:
+        raw_sanitized = "".join(c for c in session_id if c.isalnum() or c in ('-', '_')) if session_id else ""
+        if session_id and not raw_sanitized:
             raise HTTPException(status_code=400, detail="Invalid session ID")
-        
+
+        s_session_id = sanitize_id(session_id)
         s_filename = filename.strip().lstrip("/")
 
         with self.lock:
-            if s_session_id in self.nanoid_to_session:
-                real_session_id = self.nanoid_to_session[s_session_id]
-                nanoid_session = s_session_id
+            target_nanoid_session = None
+            if s_session_id and s_session_id.lower() not in ("null", "undefined", "none"):
+                if s_session_id in self.nanoid_to_session:
+                    real_session_id = self.nanoid_to_session[s_session_id]
+                    target_nanoid_session = s_session_id
+                else:
+                    real_session_id = s_session_id
+                    target_nanoid_session = self.session_to_nanoid.get(s_session_id, s_session_id)
             else:
-                real_session_id = s_session_id
-                nanoid_session = self.session_to_nanoid.get(s_session_id, s_session_id)
+                real_session_id = None
+                target_nanoid_session = None
 
             real_filename = s_filename
-            if nanoid_session in self.file_id_map:
-                if s_filename in self.file_id_map[nanoid_session]:
-                    real_filename = self.file_id_map[nanoid_session][s_filename]
-                elif os.path.basename(s_filename) in self.file_id_map[nanoid_session]:
-                    real_filename = self.file_id_map[nanoid_session][os.path.basename(s_filename)]
+            found_in_session = False
+
+            if target_nanoid_session and target_nanoid_session in self.file_id_map:
+                if s_filename in self.file_id_map[target_nanoid_session]:
+                    real_filename = self.file_id_map[target_nanoid_session][s_filename]
+                    found_in_session = True
+                elif os.path.basename(s_filename) in self.file_id_map[target_nanoid_session]:
+                    real_filename = self.file_id_map[target_nanoid_session][os.path.basename(s_filename)]
+                    found_in_session = True
+
+            # Cross-session lookup fallback: if not found in target session or target session is invalid,
+            # search file_id_map across all sessions for s_filename or basename
+            if not found_in_session:
+                base_fn = os.path.basename(s_filename)
+
+                # Check LAST_UPLOADED_SESSION_ID first if available
+                global LAST_UPLOADED_SESSION_ID, LAST_UPLOAD_TIME
+                search_sessions = list(self.file_id_map.keys())
+                if LAST_UPLOADED_SESSION_ID and (time.time() - LAST_UPLOAD_TIME < 300):
+                    pref_sid = sanitize_id(LAST_UPLOADED_SESSION_ID)
+                    pref_nanoid = self.session_to_nanoid.get(pref_sid, pref_sid)
+                    if pref_nanoid in search_sessions:
+                        search_sessions.remove(pref_nanoid)
+                        search_sessions.insert(0, pref_nanoid)
+
+                for map_nanoid_sid in search_sessions:
+                    id_map = self.file_id_map[map_nanoid_sid]
+                    if s_filename in id_map:
+                        real_filename = id_map[s_filename]
+                        real_session_id = self.nanoid_to_session.get(map_nanoid_sid, map_nanoid_sid)
+                        found_in_session = True
+                        logger.info("Resolved file ID %s via cross-session lookup to session %s (file: %s)", s_filename, real_session_id, real_filename)
+                        break
+                    elif base_fn in id_map:
+                        real_filename = id_map[base_fn]
+                        real_session_id = self.nanoid_to_session.get(map_nanoid_sid, map_nanoid_sid)
+                        found_in_session = True
+                        logger.info("Resolved file ID %s (basename: %s) via cross-session lookup to session %s (file: %s)", s_filename, base_fn, real_session_id, real_filename)
+                        break
+                    elif target_nanoid_session is None and s_filename in id_map.values():
+                        real_filename = s_filename
+                        real_session_id = self.nanoid_to_session.get(map_nanoid_sid, map_nanoid_sid)
+                        found_in_session = True
+                        logger.info("Resolved filename %s via cross-session lookup to session %s", s_filename, real_session_id)
+                        break
+                    elif target_nanoid_session is None and base_fn in id_map.values():
+                        real_filename = base_fn
+                        real_session_id = self.nanoid_to_session.get(map_nanoid_sid, map_nanoid_sid)
+                        found_in_session = True
+                        logger.info("Resolved filename %s (basename: %s) via cross-session lookup to session %s", s_filename, base_fn, real_session_id)
+                        break
+
+            # Check filesystem on disk across active sessions if volume mapping is used
+            if not found_in_session and RCE_DATA_DIR_INTERNAL and target_nanoid_session is None:
+                base_fn = os.path.basename(s_filename)
+                for active_sid in list(self.active_kernels.keys()):
+                    candidate_path = Path(RCE_DATA_DIR_INTERNAL) / active_sid / base_fn
+                    if candidate_path.exists():
+                        real_filename = base_fn
+                        real_session_id = active_sid
+                        found_in_session = True
+                        logger.info("Resolved file %s on disk in active session %s", base_fn, real_session_id)
+                        break
+
+            # Fallback for real_session_id if still unassigned or invalid
+            if not real_session_id or real_session_id.lower() in ("null", "undefined", "none"):
+                if LAST_UPLOADED_SESSION_ID and (time.time() - LAST_UPLOAD_TIME < 300):
+                    s_last = sanitize_id(LAST_UPLOADED_SESSION_ID)
+                    if s_last:
+                        real_session_id = self.nanoid_to_session.get(s_last, s_last)
+                        logger.info("Resolved download session ID from LAST_UPLOADED_SESSION_ID: %s", real_session_id)
+                    else:
+                        raise HTTPException(status_code=400, detail="Invalid session ID")
+                else:
+                    raise HTTPException(status_code=400, detail="Invalid session ID")
 
             # Normalize relative path while preventing path traversal
             path_obj = Path(real_filename)
@@ -815,8 +904,10 @@ class KernelManager:
         else:
             container = self.get_or_create_container(safe_sid)
             try:
-                # get_archive returns a tuple: (stream, stat)
-                bits, stat = container.get_archive(f"/mnt/data/{norm_filename}")
+                res = container.get_archive(f"/mnt/data/{norm_filename}")
+                if not isinstance(res, (tuple, list)) or len(res) < 2:
+                    raise FileNotFoundError()
+                bits, stat = res[0], res[1]
 
                 # Extract from tar bits
                 tar_stream = io.BytesIO(b"".join(bits))
@@ -989,24 +1080,24 @@ class CodeRequest(BaseModel):
 
 class FileInfo(BaseModel):
     model_config = ConfigDict(extra="allow")
-    id: str
-    name: str
-    url: str
-    type: str
-    session_id: Optional[str] = None
-    storage_session_id: Optional[str] = None
-    inherited: Optional[bool] = False
+    id: str = ""
+    name: str = ""
+    url: str = ""
+    type: str = "application/octet-stream"
+    session_id: str = ""
+    storage_session_id: str = ""
+    inherited: bool = False
 
 class CodeResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
-    stdout: str
-    stderr: str
-    exit_code: int
-    output: Optional[str] = ""
-    result: Optional[str] = ""  # Alias for stdout/output for some integration paths
+    stdout: str = ""
+    stderr: str = ""
+    exit_code: int = 0
+    output: str = ""
+    result: str = ""  # Alias for stdout/output for some integration paths
     status: str = "success"     # Explicit status string
-    session_id: Optional[str] = None
-    files: Optional[List[FileInfo]] = []
+    session_id: str = ""
+    files: List[FileInfo] = []
     images: List[Dict[str, Any]] = [] # Matplotlib images or other plot captures
 
 # 4. Helper Functions
@@ -1014,19 +1105,29 @@ class CodeResponse(BaseModel):
 def _get_effective_session_id(req: CodeRequest) -> Optional[str]:
     """Extracts session_id from CodeRequest with various fallbacks."""
     effective_session_id = req.session_id or req.entity_id
+    if effective_session_id and sanitize_id(str(effective_session_id)).lower() in ("", "null", "undefined", "none"):
+        effective_session_id = None
+
     if not effective_session_id and req.files and len(req.files) > 0:
-        # Pydantic parses this into FileInput objects, or it's a dict if extra fields are allowed
         first_file = req.files[0]
         if hasattr(first_file, "session_id") and getattr(first_file, "session_id"):
-            effective_session_id = first_file.session_id
-        elif hasattr(first_file, "storage_session_id") and getattr(first_file, "storage_session_id"):
-            effective_session_id = first_file.storage_session_id
-        elif isinstance(first_file, dict):
-            effective_session_id = first_file.get("session_id") or first_file.get("storage_session_id")
+            cand = getattr(first_file, "session_id")
+            if cand and sanitize_id(str(cand)).lower() not in ("", "null", "undefined", "none"):
+                effective_session_id = str(cand)
+        if not effective_session_id and hasattr(first_file, "storage_session_id") and getattr(first_file, "storage_session_id"):
+            cand = getattr(first_file, "storage_session_id")
+            if cand and sanitize_id(str(cand)).lower() not in ("", "null", "undefined", "none"):
+                effective_session_id = str(cand)
+        if not effective_session_id and isinstance(first_file, dict):
+            cand = first_file.get("session_id") or first_file.get("storage_session_id")
+            if cand and sanitize_id(str(cand)).lower() not in ("", "null", "undefined", "none"):
+                effective_session_id = str(cand)
 
     # Fallback to user_id to ensure container reuse and improve performance
     if not effective_session_id and req.user_id:
-        effective_session_id = f"user_{req.user_id}"
+        user_id_clean = sanitize_id(str(req.user_id))
+        if user_id_clean and user_id_clean.lower() not in ("null", "undefined", "none"):
+            effective_session_id = f"user_{user_id_clean}"
 
     # Fallback to last uploaded session
     if not effective_session_id:
@@ -1151,19 +1252,29 @@ async def run_code(req: CodeRequest, key: str = Security(get_api_key)):
             except Exception as e:
                 logger.warning("Failed to encode generated image %s for response: %s", f, e)
     
+    out_text = result.get("stdout") or ""
+    err_text = result.get("stderr") or ""
+    exit_val = result.get("exit_code", 0)
+
     return {
-        "stdout": result["stdout"],
-        "stderr": result["stderr"],
-        "exit_code": result["exit_code"],
-        "output": result["stdout"],
-        "result": result["stdout"],
-        "status": "success" if result["exit_code"] == 0 else "error",
-        "session_id": nanoid_session,
-        "files": structured_files,
-        "images": images
+        "stdout": out_text,
+        "stderr": err_text,
+        "exit_code": exit_val,
+        "output": out_text,
+        "result": out_text,
+        "status": "success" if exit_val == 0 else "error",
+        "session_id": nanoid_session or "",
+        "files": structured_files if structured_files is not None else [],
+        "images": images if images is not None else []
     }
 
 @app.post("/upload")
+@app.post("/run/upload")
+@app.post("/files/upload")
+@app.post("/api/upload")
+@app.post("/api/files/upload")
+@app.post("/api/files/code/upload")
+@app.post("/files/code/upload")
 async def upload_files(
     entity_id: Optional[str] = Form(None),
     session_id: Optional[str] = Form(None),
@@ -1177,16 +1288,16 @@ async def upload_files(
     """
     try:
         global LAST_UPLOADED_SESSION_ID, LAST_UPLOAD_TIME
-        # 'entity_id' (LibreChatのデフォルト) と 'session_id' (フォームまたはクエリ) の両方をサポート
         sid = entity_id or session_id or session_id_query
+        if sid and sanitize_id(str(sid)).lower() in ("", "null", "undefined", "none"):
+            sid = None
+
         if not sid:
-            # 同一セッション内での並行アップロードを処理するため、直近のアップロードセッションにフォールバック
             if LAST_UPLOADED_SESSION_ID and (time.time() - LAST_UPLOAD_TIME < 300):
                 sid = LAST_UPLOADED_SESSION_ID
                 logger.info("アップロードでフォールバックが有効化されました！直近のアップロードセッションIDを再利用します: %s", sid)
             else:
                 sid = generate_nanoid()
-                # 非同期待ちに入る前に、新しく生成したセッションIDを即座にグローバルに登録して再利用を可能にする
                 LAST_UPLOADED_SESSION_ID = sid
                 LAST_UPLOAD_TIME = time.time()
                 logger.info("アップロードにセッションIDが指定されていません。新規に生成して即時登録しました: %s", sid)
@@ -1225,15 +1336,34 @@ async def upload_files(
         # Get file mappings
         filenames = [name for name, _ in file_data]
         filename_to_id = kernel_manager.get_file_id_mapping(nanoid_session, filenames)
-        uploaded_files = [{"fileId": filename_to_id[name], "filename": name} for name in filenames]
+        uploaded_files = []
+        for name in filenames:
+            fid = filename_to_id[name]
+            uploaded_files.append({
+                "fileId": fid,
+                "id": fid,
+                "filename": name,
+                "name": name,
+                "url": f"/api/files/code/download/{nanoid_session}/{fid}",
+                "session_id": nanoid_session,
+                "storage_session_id": nanoid_session
+            })
         
         res = {
             "message": "success",
-            "session_id": nanoid_session,
-            "files": uploaded_files
+            "status": "success",
+            "session_id": nanoid_session or "",
+            "storage_session_id": nanoid_session or "",
+            "files": uploaded_files if uploaded_files is not None else []
         }
         if uploaded_files:
-            res.update(uploaded_files[0])
+            res.update({
+                "fileId": uploaded_files[0]["fileId"],
+                "id": uploaded_files[0]["id"],
+                "filename": uploaded_files[0]["filename"],
+                "name": uploaded_files[0]["name"],
+                "url": uploaded_files[0]["url"]
+            })
             
         logger.info("Upload returning success. Response: %s", res)
         return res
@@ -1241,37 +1371,6 @@ async def upload_files(
         raise
     except Exception as e:
         logger.exception("Error processing upload")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/files/{session_id}")
-async def list_session_files(session_id: str, key: str = Security(get_api_key)):
-    """
-    Lists files in a session's sandbox.
-    """
-    try:
-        s_sid = sanitize_id(session_id)
-        real_session_id = kernel_manager.resolve_session_id(s_sid)
-        with kernel_manager.lock:
-            nanoid_session = kernel_manager.session_to_nanoid.get(real_session_id, s_sid)
-
-        files = await asyncio.to_thread(kernel_manager.list_files, real_session_id, external_session_id=nanoid_session)
-
-        file_list = []
-        with kernel_manager.lock:
-            id_map = kernel_manager.file_id_map.get(nanoid_session, {})
-            reversed_map = {v: k for k, v in id_map.items()}
-            for f in files:
-                file_list.append({
-                    "filename": f,
-                    "fileId": reversed_map.get(f, ""),
-                    "id": reversed_map.get(f, "")
-                })
-
-        return file_list
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("Error listing session files")
         raise HTTPException(status_code=500, detail=str(e))
 
 def get_download_meta(real_filename: str) -> Tuple[str, Dict[str, str]]:
@@ -1300,20 +1399,91 @@ def get_download_meta(real_filename: str) -> Tuple[str, Dict[str, str]]:
 
 @app.get("/download")
 @app.get("/run/download")
+@app.get("/files/download")
+@app.get("/api/download")
+@app.get("/api/files/download")
+@app.get("/api/files/code/download")
+@app.get("/files/code/download")
 async def download_file_query(
     background_tasks: BackgroundTasks,
-    session_id: str = Query(...),
-    filename: str = Query(...),
+    session_id: Optional[str] = Query(None),
+    filename: Optional[str] = Query(None),
+    file_id: Optional[str] = Query(None),
+    file: Optional[str] = Query(None),
+    id: Optional[str] = Query(None),
+    filepath: Optional[str] = Query(None),
+    entity_id: Optional[str] = Query(None),
     key: str = Security(get_api_key)
 ):
     """
     Downloads a file from a session's sandbox using query parameters.
     """
-    return await download_session_file(session_id, filename, background_tasks, key)
+    effective_sid = session_id or entity_id
+    effective_fn = filename or file_id or file or id or filepath
+    if not effective_fn:
+        raise HTTPException(status_code=422, detail="Filename parameter is required")
+    if not effective_sid:
+        raise HTTPException(status_code=422, detail="Session ID parameter is required")
+    return await download_session_file(effective_sid, effective_fn, background_tasks, key)
+
+@app.get("/files/{session_id}")
+@app.get("/run/files/{session_id}")
+@app.get("/api/files/{session_id}")
+@app.get("/api/files/code/{session_id}")
+@app.get("/files/code/{session_id}")
+async def list_session_files(session_id: str, key: str = Security(get_api_key)):
+    """
+    Lists files in a session's sandbox.
+    """
+    try:
+        s_sid = sanitize_id(session_id)
+        if not s_sid:
+            global LAST_UPLOADED_SESSION_ID, LAST_UPLOAD_TIME
+            if LAST_UPLOADED_SESSION_ID and (time.time() - LAST_UPLOAD_TIME < 300):
+                s_sid = sanitize_id(LAST_UPLOADED_SESSION_ID)
+            elif kernel_manager.active_kernels:
+                s_sid = max(kernel_manager.active_kernels.items(), key=lambda x: x[1].get("last_accessed", 0))[0]
+
+        if not s_sid:
+            return []
+
+        real_session_id = kernel_manager.resolve_session_id(s_sid)
+        with kernel_manager.lock:
+            nanoid_session = kernel_manager.session_to_nanoid.get(real_session_id, s_sid)
+
+        files = await asyncio.to_thread(kernel_manager.list_files, real_session_id, external_session_id=nanoid_session)
+
+        file_list = []
+        with kernel_manager.lock:
+            id_map = kernel_manager.file_id_map.get(nanoid_session, {})
+            reversed_map = {v: k for k, v in id_map.items()}
+            for f in files:
+                fid = reversed_map.get(f, "")
+                file_list.append({
+                    "filename": f,
+                    "fileId": fid,
+                    "id": fid,
+                    "name": f,
+                    "url": f"/api/files/code/download/{nanoid_session}/{fid}" if fid else f"/api/files/code/download/{nanoid_session}/{f}",
+                    "session_id": nanoid_session,
+                    "storage_session_id": nanoid_session
+                })
+
+        return file_list
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error listing session files")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/files/code/download/{session_id}/{filename:path}")
+@app.get("/files/code/download/{session_id}/{filename:path}")
+@app.get("/api/code/download/{session_id}/{filename:path}")
+@app.get("/code/download/{session_id}/{filename:path}")
 @app.get("/download/{session_id}/{filename:path}")
 @app.get("/run/download/{session_id}/{filename:path}")
+@app.get("/files/download/{session_id}/{filename:path}")
+@app.get("/api/files/download/{session_id}/{filename:path}")
 async def download_session_file(
     session_id: str,
     filename: str,
