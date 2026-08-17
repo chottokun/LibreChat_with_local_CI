@@ -468,14 +468,14 @@ class KernelManager:
             if not found_in_session and RCE_DATA_DIR_INTERNAL and target_nanoid_session is None:
                 safe_base_fn = Path(s_filename).name
                 if safe_base_fn and safe_base_fn not in (".", ".."):
-                    abs_base = Path(RCE_DATA_DIR_INTERNAL).resolve()
+                    base_root = os.path.realpath(RCE_DATA_DIR_INTERNAL)
                     for active_sid in list(self.active_kernels.keys()):
                         safe_active_sid = sanitize_id(active_sid)
                         if not safe_active_sid:
                             continue
-                        cand_dir = (abs_base / safe_active_sid).resolve()
-                        cand_file = (cand_dir / safe_base_fn).resolve()
-                        if cand_file.is_relative_to(cand_dir) and cand_file.exists():
+                        session_root = os.path.realpath(os.path.join(base_root, safe_active_sid))
+                        candidate_path = os.path.realpath(os.path.join(session_root, safe_base_fn))
+                        if candidate_path.startswith(session_root) and os.path.exists(candidate_path):
                             real_filename = safe_base_fn
                             real_session_id = active_sid
                             found_in_session = True
