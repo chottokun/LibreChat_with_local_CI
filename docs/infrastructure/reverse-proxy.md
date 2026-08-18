@@ -61,6 +61,16 @@ tags:
 bash certs/generate_cert.sh
 ```
 
+### 3.1 Nginx リバースプロキシの起動
+Nginx および Sandpack Bundler は Docker Compose の `ssl-mode` プロファイルとして定義されています。起動時は `--profile ssl-mode` を付与してください：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.librechat.yml --profile ssl-mode up -d
+```
+* **Web UI (HTTPS)**: `https://<ホスト名またはIP>` (ポート 443)
+* **Sandpack Bundler (HTTPS)**: `https://<ホスト名またはIP>:8443` (ポート 8443)
+* **HTTP (ポート 80)**: 自動的にポート 443 (HTTPS) へ 301 リダイレクトされます。
+
 ---
 
 ## 4. 正式な CA 証明書（商用 / 社内 PKI / Let's Encrypt）への入れ替え手順

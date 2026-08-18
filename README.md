@@ -49,10 +49,26 @@ LibreChatにコード実行機能を提供する、サンドボックス型のCo
     docker build -f Dockerfile.rce -t custom-rce-kernel:latest .
     ```
 
-3.  **起動**:
+3.  **起動 (SSL/TLS リバースプロキシ推奨)**:
+    Nginx リバースプロキシ経由で HTTPS (443) および Sandpack Bundler (8443) を有効化して起動します。
+    > **前提**: `./certs` 配下に SSL 証明書（`server.crt` / `server.key`）が配置されている必要があります。
+
+    ```bash
+    docker compose -f docker-compose.yml -f docker-compose.librechat.yml --profile ssl-mode up -d
+    ```
+    * **Web UI (HTTPS)**: `https://<サーバーのIPまたはホスト名>` (または `https://localhost`)
+    * **HTTPアクセス**: ポート 80 宛ての通信は自動的に HTTPS (443) に 301 リダイレクトされます。
+
+    <details>
+    <summary>SSLプロファイルを使わない最小構成（ローカルHTTP）で起動する場合</summary>
+
+    Nginx を介さず、LibreChat 本体のみを直接起動します：
     ```bash
     docker compose -f docker-compose.yml -f docker-compose.librechat.yml up -d
     ```
+    * **Web UI (HTTP)**: `http://localhost:3000` (または `http://127.0.0.1:3000`)
+    * **注意**: セキュリティ保護のため、LibreChat 本体のポートはホストマシンのループバック (`127.0.0.1:3000`) にのみバインドされています。外部の別PCやスマホ等のブラウザからアクセスする場合は、上記 **SSL/TLS モード (`--profile ssl-mode`)** をご使用ください。
+    </details>
 
 ### B. API単体での起動 (既存のLibreChatと連携)
 
