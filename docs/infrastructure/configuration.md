@@ -41,16 +41,30 @@ tags:
 
 ```env
 # RCE API 接続設定
-LIBRECHAT_CODE_BASEURL=http://code-interpreter-api:8000
+LIBRECHAT_CODE_BASEURL=http://librechat_code_interpreter_api:8000
 LIBRECHAT_CODE_API_KEY=your_secure_secret_key
 CODE_API_KEY=your_secure_secret_key
 
 # セキュリティシークレット
 JWT_SECRET=your_jwt_secret
+JWT_REFRESH_SECRET=your_jwt_refresh_secret
 CREDS_KEY=your_creds_key
+CREDS_IV=your_creds_iv
 
-# LLMプロバイダー設定例 (Ollama)
+# セッション・ポート設定
+SESSION_EXPIRY=86400000          # ログイン保持期間 (ミリ秒)
+LIBRECHAT_PORT=3000              # LibreChat ホスト側公開ポート
+HTTP_PORT=80                     # Nginx HTTP 公開ポート (HTTPSへ301転送)
+HTTPS_PORT=443                   # Nginx HTTPS 公開ポート
+SANDPACK_HTTPS_PORT=8443         # Sandpack Bundler HTTPS 公開ポート
+SANDPACK_BUNDLER_URL=https://localhost:8443
+
+# LLMプロバイダー設定例 (Ollama / 外部API)
 OLLAMA_BASE_URL=http://host.docker.internal:11434
+OLLAMA_MODELS=qwen3.5:4b
+EXTERNAL_API_URL=https://api.ai.sakura.ad.jp/v1/
+EXTERNAL_API_KEY=your_api_key
+EXTERNAL_LLM_MODEL=your_model_name
 ```
 
 ## 4. `librechat.yaml` 設定例

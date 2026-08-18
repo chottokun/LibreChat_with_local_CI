@@ -2,7 +2,7 @@
 
 ## 2026-08-18
 
-* **Documentation**: [docs/infrastructure/docker-setup.md](./infrastructure/docker-setup.md) および [docs/infrastructure/reverse-proxy.md](./infrastructure/reverse-proxy.md) を更新。`--profile ssl-mode` による Nginx SSL/TLS リバースプロキシ起動手順、アクセスURL、HTTP/HTTPSリダイレクト仕様、および通常起動時のループバック（`127.0.0.1:3000`）セキュリティ制限の解説を体系的に追記。
+* **Documentation**: [docs/infrastructure/configuration.md](./infrastructure/configuration.md), [docs/infrastructure/docker-setup.md](./infrastructure/docker-setup.md), [docs/infrastructure/reverse-proxy.md](./infrastructure/reverse-proxy.md) を更新。`SESSION_EXPIRY`, 各種ポート変数、SSL/TLSリバースプロキシ設定を含め、リポジトリ内の全設定項目を完全に網羅・同期。
 * **Security & Architecture**: [docs/architecture/security.md](./architecture/security.md) および [docs/infrastructure/docker-setup.md](./infrastructure/docker-setup.md) に、ボリュームマウント時のセッション個別サブディレクトリマウントによるユーザー間隔離、コンテナサイズ実測値（ベース700MB / 差分数十KB〜数MB）、TTL（`RCE_SESSION_TTL`）長期保持の妥当性、およびTTL経過後のオンデマンド自動再生成ライフサイクルの詳細を体系化。
 
 ## 2026-08-14
