@@ -8,6 +8,19 @@ LibreChatにコード実行機能を提供する、サンドボックス型のCo
 
 クラウドプロバイダー（Gemini, OpenAI等）のAPI、およびローカルLLM（Ollama等）のいずれの構成でも利用可能です。
 
+### 本リポジトリの特徴と強み (設計思想)
+
+* **1台の Docker で完結するシンプル・軽量構成**:
+  公式の Code Interpreter（`ClickHouse/code-interpreter`）が前提とする Redis（ジョブキュー）や S3 互換オブジェクトストレージ（MinIO等）などの追加ミドルウェアを必要とせず、単一の Docker 環境（`docker compose`）だけでシンプル・安全・高速に動作します。
+* **対話継続性を守るセッションID自動フォールバック**:
+  LibreChat のクライアント・エージェント側でファイル未添付時などに `session_id` が省略されて送信された場合でも、`user_id` や直近アップロード履歴から自動的にセッションを復元・バインドし、変数の永続性（ステートフル実行）を維持します。
+* **日本語ファイル名 (UTF-8) の完全対応**:
+  RFC 5987 に準拠した `filename*` エンコード処理により、日本語名を含む生成グラフやアップロードファイルを文字化けなく安全に扱えます。
+* **オフライン / オンプレミス環境での Artifacts (React UI 描画) 連携**:
+  同梱された Sandpack Bundler および Nginx リバースプロキシ（SSL/TLS モード）により、完全ローカル・オフライン環境でも React や HTML プレビューを即時レンダリング可能です。
+
+---
+
 ## 主要な機能と仕様
 
 - **多言語対応**: Pythonに加え、BashおよびR言語の実行に対応しています。
@@ -49,9 +62,15 @@ LibreChatにコード実行機能を提供する、サンドボックス型のCo
     docker build -f Dockerfile.rce -t custom-rce-kernel:latest .
     ```
 
-3.  **起動 (SSL/TLS リバースプロキシ推奨)**:
+3.  **SSL/TLS 証明書の準備**:
+    自己署名証明書（自己認証）を使用する場合は、同梱のスクリプトで SAN（`localhost`, `127.0.0.1`, ホストLAN内IP）を含む証明書を自動生成します：
+    ```bash
+    bash certs/generate_cert.sh
+    ```
+    > **Note**: 商用CA / Let's Encrypt / 社内PKI などの正式な証明書を使用する場合は、証明書・秘密鍵を `./certs/server.crt` および `./certs/server.key` に配置してください。詳細な入れ替え手順は [リバースプロキシ & SSL設計 (docs/infrastructure/reverse-proxy.md)](./docs/infrastructure/reverse-proxy.md) を参照してください。
+
+4.  **起動 (SSL/TLS リバースプロキシ推奨)**:
     Nginx リバースプロキシ経由で HTTPS (443) および Sandpack Bundler (8443) を有効化して起動します。
-    > **前提**: `./certs` 配下に SSL 証明書（`server.crt` / `server.key`）が配置されている必要があります。
 
     ```bash
     docker compose -f docker-compose.yml -f docker-compose.librechat.yml --profile ssl-mode up -d

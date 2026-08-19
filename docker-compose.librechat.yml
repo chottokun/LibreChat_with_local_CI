@@ -52,7 +52,7 @@ services:
       - librechat-network
 
   librechat:
-    image: ghcr.io/danny-avila/librechat:v0.8.6
+    image: ghcr.io/danny-avila/librechat:v0.8.7
     container_name: librechat
     restart: always
     ports:

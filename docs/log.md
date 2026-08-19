@@ -1,5 +1,10 @@
 # Knowledge Update Log
 
+## 2026-08-19
+
+* **Update**: [docker-compose.librechat.yml](../docker-compose.librechat.yml) の LibreChat イメージを `v0.8.7` に更新。互換性および既存のセッションIDフォールバック・Nanoid双方向マッピングの妥当性を検証。
+* **Documentation**: [README.md](../README.md) に本リポジトリの設計思想・強み（Redis/S3不要の1台Docker完結、セッションフォールバック、日本語ファイル名完全対応、オフラインArtifacts連携）、および自己署名証明書（SAN対応）のワンコマンド生成手順・正式CA証明書案内を追記。
+
 ## 2026-08-18
 
 * **Documentation**: [docs/infrastructure/configuration.md](./infrastructure/configuration.md), [docs/infrastructure/docker-setup.md](./infrastructure/docker-setup.md), [docs/infrastructure/reverse-proxy.md](./infrastructure/reverse-proxy.md) を更新。`SESSION_EXPIRY`, 各種ポート変数、SSL/TLSリバースプロキシ設定を含め、リポジトリ内の全設定項目を完全に網羅・同期。
