@@ -1,5 +1,9 @@
 # Knowledge Update Log
 
+## 2026-08-20
+
+* **Report & Security**: [docs/domain/session-isolation-report.md](./domain/session-isolation-report.md) を作成。`/upload` における `LAST_UPLOADED_SESSION_ID` および `/exec` における `user_{user_id}` 共有フォールバックが原因で発生していた別チャット間での `/mnt/data/` データ残留問題の根本原因、新設計仕様（セッション完全分離と `files[].storage_session_id` によるチャット内継続性）、および全308件の検証結果を体系的に文書化。
+
 ## 2026-08-19
 
 * **Update**: [docker-compose.librechat.yml](../docker-compose.librechat.yml) の LibreChat イメージを `v0.8.7` に更新。互換性および既存のセッションIDフォールバック・Nanoid双方向マッピングの妥当性を検証。

@@ -71,7 +71,7 @@ sequenceDiagram
     participant KM as KernelManager
     participant RCE as RCE Sandbox Container
 
-    LC->>API: POST /exec (code, language, session_id / user_id)
+    LC->>API: POST /exec (code, language, session_id / files)
     API->>API: 認証検証 (X-API-Key / Bearer)
     API->>KM: セッションID解決 & 21字Nanoidマッピング
     KM->>KM: セッション別ロック (WeakrefRLock) 取得
