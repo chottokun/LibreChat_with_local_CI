@@ -7,6 +7,7 @@ from main import app, API_KEY, kernel_manager
 
 client = TestClient(app)
 
+
 @pytest.fixture(autouse=True)
 def reset_state():
     # Reset global state to ensure test isolation
@@ -20,75 +21,118 @@ def reset_state():
         kernel_manager.file_id_map = {}
     yield
 
-def test_exec_fallback_to_last_upload():
+
+def test_exec_without_session_creates_new_session():
     """
-    Verify that the global LAST_UPLOADED_SESSION_ID set by /upload
-    is correctly used as a fallback in /exec (L832-833).
+    セッションID未指定のexecリクエストが、
+    LAST_UPLOADED_SESSION_ID に依存せず新規セッションを生成することを検証。
+    チャット間セッション汚染の防止を確認する。
     """
-    with patch.object(kernel_manager, 'upload_files_batch'):
-        with patch.object(kernel_manager, 'execute_code') as mock_exec:
-            with patch.object(kernel_manager, 'list_files', return_value=[]):
+    with patch.object(kernel_manager, "upload_files_batch"):
+        with patch.object(kernel_manager, "execute_code") as mock_exec:
+            with patch.object(kernel_manager, "list_files", return_value=[]):
                 mock_exec.return_value = {"stdout": "ok", "stderr": "", "exit_code": 0}
 
-                # 1. Upload a file to establish a session
-                session_id = "upload-session-fallback-test"
+                # 1. アップロードでセッションを確立
+                upload_session_id = "upload-session-isolation-test"
                 client.post(
                     "/upload",
                     headers={"X-API-Key": API_KEY},
-                    data={"session_id": session_id},
-                    files=[("files", ("test.txt", b"hello"))]
+                    data={"session_id": upload_session_id},
+                    files=[("files", ("test.txt", b"hello"))],
                 )
 
-                assert main.LAST_UPLOADED_SESSION_ID == session_id
+                assert main.LAST_UPLOADED_SESSION_ID == upload_session_id
 
-                # 2. Execute code without session_id - should fallback to session_id
+                # 2. セッションID未指定でexec → 新規セッションが生成される
                 response = client.post(
                     "/exec",
                     headers={"X-API-Key": API_KEY},
-                    json={"code": "print('hello')"}
+                    json={"code": "print('hello')"},
                 )
 
                 assert response.status_code == 200
                 returned_sid = response.json()["session_id"]
                 assert len(returned_sid) == 21
 
-                # Check they resolve to the same real UUID
-                real_sid_1, _ = kernel_manager.get_or_create_session_mapping(session_id)
-                real_sid_2, _ = kernel_manager.get_or_create_session_mapping(returned_sid)
-                assert real_sid_1 == real_sid_2
-                mock_exec.assert_called_once()
+                # アップロードセッションとは別のセッションが生成されていることを確認
+                real_upload_sid, _ = kernel_manager.get_or_create_session_mapping(
+                    upload_session_id
+                )
+                real_exec_sid, _ = kernel_manager.get_or_create_session_mapping(
+                    returned_sid
+                )
+                assert real_upload_sid != real_exec_sid
+
+
+def test_exec_with_storage_session_id_reuses_session():
+    """
+    files[].storage_session_id を含むexecリクエストが、
+    正しく既存セッションを再利用することを検証。
+    同一チャット内のターン間でセッションが維持される動作を確認する。
+    """
+    with patch.object(kernel_manager, "execute_code") as mock_exec:
+        with patch.object(kernel_manager, "list_files", return_value=[]):
+            mock_exec.return_value = {"stdout": "ok", "stderr": "", "exit_code": 0}
+
+            # 既知のセッションIDで2回実行
+            session_id = "same-chat-session"
+            for _ in range(2):
+                response = client.post(
+                    "/exec",
+                    headers={"X-API-Key": API_KEY},
+                    json={
+                        "code": "print('hello')",
+                        "files": [
+                            {
+                                "id": "file1",
+                                "name": "data.csv",
+                                "storage_session_id": session_id,
+                            }
+                        ],
+                    },
+                )
+                assert response.status_code == 200
+
+            # 2回のexecが同じセッションUUIDで実行されたことを確認
+            assert mock_exec.call_count == 2
+            first_call_sid = mock_exec.call_args_list[0][0][0]
+            second_call_sid = mock_exec.call_args_list[1][0][0]
+            assert first_call_sid == second_call_sid
+
 
 def test_upload_multiple_files_one_invalid():
     """
     Verify that if any file in a multi-file upload has an invalid filename,
     the request returns a 400 error.
     """
-    with patch.object(kernel_manager, 'upload_files_batch'):
+    with patch.object(kernel_manager, "upload_files_batch"):
         files = [
             ("files", ("valid.txt", b"content")),
-            ("files", ("/", b"invalid")) # Basename is empty, should trigger 400
+            ("files", ("/", b"invalid")),  # Basename is empty, should trigger 400
         ]
         response = client.post(
             "/upload",
             headers={"X-API-Key": API_KEY},
             data={"session_id": "test-session"},
-            files=files
+            files=files,
         )
         assert response.status_code == 400
         assert "Invalid filename" in response.json()["detail"]
+
 
 def test_upload_special_characters_session_id_mapping():
     """
     Verify that session IDs with special characters are correctly sanitized internally
     but the original ID is preserved in the mapping and response.
     """
-    with patch.object(kernel_manager, 'upload_files_batch') as mock_upload:
+    with patch.object(kernel_manager, "upload_files_batch") as mock_upload:
         special_sid = "session!@$ %^&*()"
         response = client.post(
             "/upload",
             headers={"X-API-Key": API_KEY},
             data={"session_id": special_sid},
-            files=[("files", ("test.txt", b"content"))]
+            files=[("files", ("test.txt", b"content"))],
         )
         assert response.status_code == 200
         returned_sid = response.json()["session_id"]
@@ -113,12 +157,12 @@ def test_upload_parallel_no_session_id_reuses_same_session():
     2回目以降のアップロードが最初のアップロードで生成されたセッションIDを
     正しく再利用することを検証します。
     """
-    with patch.object(kernel_manager, 'upload_files_batch'):
+    with patch.object(kernel_manager, "upload_files_batch"):
         # 1. 最初のファイルをセッションIDなしでアップロード
         response1 = client.post(
             "/upload",
             headers={"X-API-Key": API_KEY},
-            files=[("files", ("first.txt", b"first file content"))]
+            files=[("files", ("first.txt", b"first file content"))],
         )
         assert response1.status_code == 200
         data1 = response1.json()
@@ -129,7 +173,7 @@ def test_upload_parallel_no_session_id_reuses_same_session():
         response2 = client.post(
             "/upload",
             headers={"X-API-Key": API_KEY},
-            files=[("files", ("second.txt", b"second file content"))]
+            files=[("files", ("second.txt", b"second file content"))],
         )
         assert response2.status_code == 200
         data2 = response2.json()
@@ -144,11 +188,15 @@ def test_exec_aggregates_files_from_different_sessions():
     実行リクエスト（/exec）において、異なるセッションIDを持つ複数のファイルが渡された場合、
     それらが実行対象のセッション（コンテナ）へ自動的にコピー・集約されることを検証します。
     """
-    with patch.object(kernel_manager, 'execute_code') as mock_exec:
-        with patch.object(kernel_manager, 'list_files', return_value=[]):
-            with patch.object(kernel_manager, 'download_file') as mock_download:
-                with patch.object(kernel_manager, 'upload_file') as mock_upload:
-                    mock_exec.return_value = {"stdout": "ok", "stderr": "", "exit_code": 0}
+    with patch.object(kernel_manager, "execute_code") as mock_exec:
+        with patch.object(kernel_manager, "list_files", return_value=[]):
+            with patch.object(kernel_manager, "download_file") as mock_download:
+                with patch.object(kernel_manager, "upload_file") as mock_upload:
+                    mock_exec.return_value = {
+                        "stdout": "ok",
+                        "stderr": "",
+                        "exit_code": 0,
+                    }
                     # download_file は (content, mtime) を返す
                     mock_download.return_value = (b"file content", 0)
 
@@ -163,10 +211,10 @@ def test_exec_aggregates_files_from_different_sessions():
                                 {
                                     "id": "file-id-1",
                                     "name": "other.txt",
-                                    "session_id": "other-session"
+                                    "session_id": "other-session",
                                 }
-                            ]
-                        }
+                            ],
+                        },
                     )
 
                     assert response.status_code == 200
@@ -190,30 +238,32 @@ async def test_upload_parallel_concurrent_instant_reuse():
     import asyncio
     from httpx import AsyncClient, ASGITransport
     from main import app, API_KEY
-    
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
         # 1. 2つのアップロードリクエストを並行して実行
         # 同時並行処理におけるセッションIDの即時登録と再利用をテスト
         res1_task = ac.post(
             "/upload",
             headers={"X-API-Key": API_KEY},
-            files={"files": ("file1.txt", b"file1 content")}
+            files={"files": ("file1.txt", b"file1 content")},
         )
         res2_task = ac.post(
             "/upload",
             headers={"X-API-Key": API_KEY},
-            files={"files": ("file2.txt", b"file2 content")}
+            files={"files": ("file2.txt", b"file2 content")},
         )
-        
+
         # モックは使用せず、通常のAPIフローを通してセッション解決を検証
-        with patch.object(kernel_manager, 'upload_files_batch'):
+        with patch.object(kernel_manager, "upload_files_batch"):
             res1, res2 = await asyncio.gather(res1_task, res2_task)
-            
+
         assert res1.status_code == 200
         assert res2.status_code == 200
-        
+
         sid1 = res1.json()["session_id"]
         sid2 = res2.json()["session_id"]
-        
+
         # 即時登録によって同じセッションIDが割り振られていることを確認
         assert sid1 == sid2
