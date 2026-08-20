@@ -78,8 +78,8 @@ def test_session_mapping_helper_existing_session():
     assert resolved_nanoid == resolved_nanoid_2
     assert len(resolved_nanoid_2) == 21
 
-def test_librechat_session_id_omission_bug_fix():
-    """LibreChatクライアント側でsession_idが欠落したバグに対し、user_idからセッションIDをフォールバック再利用するロジックを検証。"""
+def test_librechat_session_id_omission_generates_new_isolated_session():
+    """セッションID未指定のexecリクエスト（user_idのみ指定）に対して、user_{user_id}共有バインドではなく独立した新規セッションが生成されることを検証。"""
     from unittest.mock import patch, MagicMock
     with patch("main.DOCKER_CLIENT") as mock_client:
         mock_container = MagicMock()
@@ -91,9 +91,9 @@ def test_librechat_session_id_omission_bug_fix():
 
         headers = {"X-API-Key": API_KEY}
         test_user_id = "12345"
-        
-        # session_idを渡さず、user_idのみを渡す
-        response = client.post(
+
+        # 1. 1回目のexec（Chat 1）
+        res1 = client.post(
             "/exec",
             json={
                 "code": "print('ok')",
@@ -101,13 +101,22 @@ def test_librechat_session_id_omission_bug_fix():
             },
             headers=headers
         )
-        assert response.status_code == 200
-        
-        # 戻り値の session_id が 21文字のNanoidにマッピングされていることを検証
-        returned_session_id = response.json()["session_id"]
-        assert len(returned_session_id) == 21
+        assert res1.status_code == 200
+        sid1 = res1.json()["session_id"]
+        assert len(sid1) == 21
 
-        # その戻り値が user_12345 からマップされた internal UUID の nanoid 表現であることを検証
-        real_sid, _ = kernel_manager.get_or_create_session_mapping(f"user_{test_user_id}")
-        real_sid_from_returned, _ = kernel_manager.get_or_create_session_mapping(returned_session_id)
-        assert real_sid == real_sid_from_returned
+        # 2. 2回目のexec（Chat 2）
+        res2 = client.post(
+            "/exec",
+            json={
+                "code": "print('ok')",
+                "user_id": test_user_id
+            },
+            headers=headers
+        )
+        assert res2.status_code == 200
+        sid2 = res2.json()["session_id"]
+        assert len(sid2) == 21
+
+        # チャット分離のため、同一user_idであっても別の新規セッションが生成されていることを確認
+        assert sid1 != sid2

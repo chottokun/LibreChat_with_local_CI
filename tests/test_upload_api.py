@@ -8,9 +8,7 @@ client = TestClient(app)
 
 @pytest.fixture(autouse=True)
 def reset_kernel_manager():
-    # テスト間の分離を保証するため、グローバル状態およびマッピングをクリア
-    main.LAST_UPLOADED_SESSION_ID = None
-    main.LAST_UPLOAD_TIME = 0
+    # テスト間の分離を保証するため、マッピングをクリア
     with kernel_manager.lock:
         kernel_manager.active_kernels = {}
         kernel_manager.nanoid_to_session = {}
@@ -205,28 +203,31 @@ async def test_upload_invalid_filename_none_unit():
     assert "Invalid filename" in excinfo.value.detail
 
 
-def test_upload_updates_global_state():
+def test_upload_without_session_id_generates_isolated_session():
     """
-    アップロードが成功した際に、最後のセッションIDとアップロード日時を記録する
-    グローバル状態（LAST_UPLOADED_SESSION_ID / LAST_UPLOAD_TIME）が正しく更新されることを検証します。
+    セッションID未指定のアップロードが、他のアップロードから独立した
+    固有のNanoidセッションIDを割り当てることを検証します。
     """
-    import time
     with patch.object(kernel_manager, 'upload_files_batch'):
-        session_id = "global-test-session"
-
-        # アップロードの実行
-        response = client.post(
+        response1 = client.post(
             "/upload",
             headers={"X-API-Key": API_KEY},
-            data={"session_id": session_id},
-            files=[("files", ("test.txt", b"content"))]
+            files=[("files", ("test1.txt", b"content1"))]
         )
-        assert response.status_code == 200
+        assert response1.status_code == 200
+        sid1 = response1.json()["session_id"]
 
-        # グローバル変数の状態変化を検証
-        assert main.LAST_UPLOADED_SESSION_ID == session_id
-        assert main.LAST_UPLOAD_TIME > 0
-        assert time.time() - main.LAST_UPLOAD_TIME < 5
+        response2 = client.post(
+            "/upload",
+            headers={"X-API-Key": API_KEY},
+            files=[("files", ("test2.txt", b"content2"))]
+        )
+        assert response2.status_code == 200
+        sid2 = response2.json()["session_id"]
+
+        assert sid1 != sid2
+        assert len(sid1) == 21
+        assert len(sid2) == 21
 
 
 def test_upload_generic_exception_handling():
