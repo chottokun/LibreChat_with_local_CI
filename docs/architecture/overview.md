@@ -91,5 +91,6 @@ sequenceDiagram
 ## 4. 関連ドキュメント
 * [Concurrency Control](./concurrency.md) - 並行制御とレースコンディション防御
 * [Security Model](./security.md) - 多層防御とセキュリティガイドライン
-* [Session Resolution](../domain/session-resolution.md) - セッションIDのフォールバック仕様
+* [Session Resolution](../domain/session-resolution.md) - セッションIDの解決仕様
+* [Session Isolation Investigation Report](../domain/session-isolation-report.md) - チャット間・ユーザー間セッション徹底分離調査とエンタープライズ比較報告書
 * [Docker Setup](../infrastructure/docker-setup.md) - Docker Compose構成とストレージモード

@@ -30,6 +30,7 @@ from fastapi.security import APIKeyHeader, HTTPBearer, HTTPAuthorizationCredenti
 from fastapi.responses import FileResponse
 import mimetypes
 from urllib.parse import quote
+from dataclasses import dataclass
 from pydantic import BaseModel, ConfigDict
 from typing import List, Optional, Dict, Any, Tuple, TYPE_CHECKING
 from concurrent.futures import ThreadPoolExecutor
@@ -324,6 +325,19 @@ def sanitize_id(id_str: str) -> str:
     # Remove any characters that are not alphanumeric, hyphen, or underscore
     # This prevents path traversal and other injection attacks.
     return "".join(c for c in id_str if c.isalnum() or c in ("-", "_"))
+
+
+@dataclass(frozen=True)
+class SessionContext:
+    """Explicit domain boundary representing an isolated RCE session."""
+
+    real_session_id: str  # Internal UUID v4
+    nanoid_session: str  # External 21-char Nanoid
+
+    @property
+    def workspace_path(self) -> Path:
+        """Isolated host volume path for this session."""
+        return Path(RCE_DATA_DIR_INTERNAL) / self.real_session_id
 
 
 def _get_session_ids(sid: str) -> Tuple[str, str]:
