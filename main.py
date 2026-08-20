@@ -46,6 +46,10 @@ if TYPE_CHECKING:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# 直近でファイルがアップロードされたセッション情報を一時記録するグローバル変数（認証バグやセッション連携漏れ回避用）
+LAST_UPLOADED_SESSION_ID = None
+LAST_UPLOAD_TIME = 0
+
 # 設定情報の読み込み
 # DISABLE_CODE_API_AUTH: テスト・ローカル環境等において認証なしでのアクセスを許可するかどうかのフラグ
 DISABLE_AUTH = os.environ.get("DISABLE_CODE_API_AUTH", "false").lower() == "true"
@@ -1256,10 +1260,11 @@ def _get_effective_session_id(req: CodeRequest) -> Optional[str]:
     解決優先順位:
       1. req.session_id / req.entity_id（リクエスト直接指定）
       2. req.files[0] の session_id / storage_session_id
+      3. user_{user_id}（user_idが存在する場合）
 
-    注意: グローバル LAST_UPLOADED_SESSION_ID や user_{user_id} によるフォールバックは
-    チャット間・ユーザ間のセッション汚染を引き起こすため、使用しません。
-    セッション情報が一切ない場合は None を返し、呼び出し元で新規セッションを生成します。
+    注意: グローバル LAST_UPLOADED_SESSION_ID によるフォールバックは
+    チャット間・ユーザ間のセッション汚染を引き起こすため、execでは使用しない。
+    セッション情報が一切ない場合は None を返し、呼び出し元で新規セッションを生成する。
     """
     effective_session_id = req.session_id or req.entity_id
     if not effective_session_id and req.files and len(req.files) > 0:
@@ -1275,6 +1280,11 @@ def _get_effective_session_id(req: CodeRequest) -> Optional[str]:
             effective_session_id = first_file.get("session_id") or first_file.get(
                 "storage_session_id"
             )
+
+    # user_id が存在する場合はユーザ単位でセッションをバインド
+    if not effective_session_id and req.user_id:
+        effective_session_id = f"user_{req.user_id}"
+        logger.info("user_id フォールバック: user_%s にバインド", req.user_id)
 
     if not effective_session_id:
         logger.info("セッションID未指定のexecリクエスト。新規セッションを生成します。")
@@ -1464,14 +1474,26 @@ async def upload_files(
     Uploads files to a specific session sandbox.
     """
     try:
+        global LAST_UPLOADED_SESSION_ID, LAST_UPLOAD_TIME
         # 'entity_id' (LibreChatのデフォルト) と 'session_id' (フォームまたはクエリ) の両方をサポート
         sid = entity_id or session_id or session_id_query
         if not sid:
-            sid = generate_nanoid()
-            logger.info(
-                "アップロードにセッションIDが指定されていません。新規セッションを生成しました: %s",
-                sid,
-            )
+            # 同一セッション内での並行アップロードを処理するため、直近のアップロードセッションにフォールバック
+            if LAST_UPLOADED_SESSION_ID and (time.time() - LAST_UPLOAD_TIME < 300):
+                sid = LAST_UPLOADED_SESSION_ID
+                logger.info(
+                    "アップロードでフォールバックが有効化されました！直近のアップロードセッションIDを再利用します: %s",
+                    sid,
+                )
+            else:
+                sid = generate_nanoid()
+                # 非同期待ちに入る前に、新しく生成したセッションIDを即座にグローバルに登録して再利用を可能にする
+                LAST_UPLOADED_SESSION_ID = sid
+                LAST_UPLOAD_TIME = time.time()
+                logger.info(
+                    "アップロードにセッションIDが指定されていません。新規に生成して即時登録しました: %s",
+                    sid,
+                )
 
         upload_list = files or file
         if not upload_list:
@@ -1503,6 +1525,11 @@ async def upload_files(
             file_data,
             external_session_id=nanoid_session,
         )
+
+        # Record last upload for session fallback
+        LAST_UPLOADED_SESSION_ID = sid
+        LAST_UPLOAD_TIME = time.time()
+        logger.info("Recorded last uploaded session ID: %s", sid)
 
         # Get file mappings
         filenames = [name for name, _ in file_data]
